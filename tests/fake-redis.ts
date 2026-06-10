@@ -4,7 +4,7 @@ export class FakeRedis {
   hashes = new Map<string, Map<string, number>>();
 
   async get(k: string) { return this.store.get(k) ?? null; }
-  async set(k: string, v: unknown) { this.store.set(k, v); return "OK"; }
+  async set(k: string, v: unknown, _opts?: { ex?: number }) { this.store.set(k, v); return "OK"; }
   async del(k: string) { return this.store.delete(k) ? 1 : 0; }
 
   async incr(k: string) {
