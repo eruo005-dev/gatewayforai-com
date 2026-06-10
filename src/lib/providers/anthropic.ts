@@ -57,6 +57,14 @@ type OAMessage = {
   tool_call_id?: string;
 };
 
+type ContentPart = { type: string; text?: string; cache_control?: unknown };
+
+/** Returns true if any element of an array content has a cache_control field. */
+function hasCacheControl(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return (content as ContentPart[]).some((p) => p.cache_control !== undefined);
+}
+
 /** Translate OpenAI messages (excluding system) into Anthropic messages, merging consecutive tool results. */
 function mapMessages(messages: OAMessage[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
@@ -100,9 +108,19 @@ function mapMessages(messages: OAMessage[]): Array<Record<string, unknown>> {
       continue;
     }
 
+    // Preserve cache_control blocks when present; otherwise flatten to text.
+    const contentValue =
+      Array.isArray(m.content) && hasCacheControl(m.content)
+        ? (m.content as ContentPart[]).map((p) => ({
+            type: p.type ?? "text",
+            ...(p.text !== undefined && { text: p.text }),
+            ...(p.cache_control !== undefined && { cache_control: p.cache_control }),
+          }))
+        : contentText(m.content);
+
     out.push({
       role: m.role === "assistant" ? "assistant" : "user",
-      content: contentText(m.content),
+      content: contentValue,
     });
   }
   return out;
@@ -110,10 +128,22 @@ function mapMessages(messages: OAMessage[]): Array<Record<string, unknown>> {
 
 export function toAnthropicBody(body: Record<string, any>): Record<string, any> {
   const messages = (body.messages ?? []) as OAMessage[];
-  const system = messages
-    .filter((m) => m.role === "system")
-    .map((m) => contentText(m.content))
-    .join("\n");
+  const systemMessages = messages.filter((m) => m.role === "system");
+
+  // If any system message has array content with cache_control, emit as block array.
+  // Otherwise, join as a plain string (existing behaviour).
+  const systemHasBlocks = systemMessages.some((m) => hasCacheControl(m.content));
+  const system = systemHasBlocks
+    ? systemMessages.flatMap((m) =>
+        Array.isArray(m.content)
+          ? (m.content as ContentPart[]).map((p) => ({
+              type: p.type ?? "text",
+              ...(p.text !== undefined && { text: p.text }),
+              ...(p.cache_control !== undefined && { cache_control: p.cache_control }),
+            }))
+          : [{ type: "text", text: contentText(m.content) }],
+      )
+    : systemMessages.map((m) => contentText(m.content)).join("\n");
 
   // tool_choice "none" means: strip tools entirely (Anthropic has no field equivalent we use).
   const stripTools = body.tool_choice === "none";

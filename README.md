@@ -36,6 +36,8 @@ npm install && npm run dev   # tests: npm test
     the first attempt. `cheapest` sorts by total per-token cost (unknown-price models go last);
     `fastest` sorts by static provider latency rank (groq → gemini → openai → …). The resolved
     strategy is echoed back in the `x-gateway-route` response header.
+  - **Anthropic prompt-caching:** `cache_control` passes through intact on user and system message
+    content blocks when routing to Anthropic.
   - **Tool/function calling:** OpenAI-style `tools`, `tool_choice`, assistant `tool_calls`, and
     `role:"tool"` results work across **all** providers including Anthropic — the gateway
     translates the full tool-calling protocol in both directions, including streaming

@@ -286,6 +286,71 @@ describe("fromAnthropicResponse — tool_use", () => {
   });
 });
 
+describe("toAnthropicBody — cache_control passthrough", () => {
+  it("preserves cache_control on user message content parts", () => {
+    const out = toAnthropicBody({
+      model: "claude-sonnet-4-6",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Long context", cache_control: { type: "ephemeral" } },
+            { type: "text", text: "Short question" },
+          ],
+        },
+      ],
+    });
+    expect(out.messages[0].content).toEqual([
+      { type: "text", text: "Long context", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Short question" },
+    ]);
+  });
+
+  it("flattens array content without cache_control to string (regression safety)", () => {
+    const out = toAnthropicBody({
+      model: "claude-sonnet-4-6",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Part A" }, { type: "text", text: " B" }],
+        },
+      ],
+    });
+    expect(out.messages[0].content).toBe("Part A B");
+  });
+
+  it("emits system as block array when cache_control present", () => {
+    const out = toAnthropicBody({
+      model: "claude-sonnet-4-6",
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "Large system prompt", cache_control: { type: "ephemeral" } },
+          ],
+        },
+        { role: "user", content: "Hi" },
+      ],
+    });
+    expect(Array.isArray(out.system)).toBe(true);
+    expect(out.system).toEqual([
+      { type: "text", text: "Large system prompt", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+
+  it("keeps system as plain string when no cache_control in system (regression safety)", () => {
+    const out = toAnthropicBody({
+      model: "claude-sonnet-4-6",
+      messages: [
+        { role: "system", content: "Be terse." },
+        { role: "user", content: "Hi" },
+      ],
+    });
+    expect(typeof out.system).toBe("string");
+    expect(out.system).toBe("Be terse.");
+  });
+});
+
 describe("translateAnthropicSSE — tool_use streaming", () => {
   function anthropicStream(events: object[]): ReadableStream<Uint8Array> {
     const enc = new TextEncoder();
