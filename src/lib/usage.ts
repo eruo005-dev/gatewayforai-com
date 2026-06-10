@@ -33,7 +33,7 @@ export async function recordUsage(
   if (fields.error) await r.hincrby(k, "errors", 1);
   if (fields.fallbacks) await r.hincrby(k, "fallbacks", fields.fallbacks);
   if (fields.provider) await r.hincrby(k, `provider:${fields.provider}`, 1);
-  await r.expire(k, 30 * DAY_SECONDS);
+  await r.expire(k, 90 * DAY_SECONDS);
 }
 
 export type UsageDay = { date: string; requests: number; errors: number; fallbacks: number } & Record<string, number | string>;

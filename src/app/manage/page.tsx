@@ -186,7 +186,8 @@ export default function Manage() {
           </div>
 
           <div className="panel">
-            <h3>Usage — last 7 days</h3>
+            <h3>Usage — last 30 days</h3>
+            <p className="hint">Last 30 days · counters only, no request contents stored.</p>
             <pre style={{ fontSize: 12.5, color: "var(--muted)", overflowX: "auto" }}>
               {"date         requests  fallbacks  errors\n" +
                 cfg.usage

@@ -54,7 +54,7 @@ export async function GET(req: Request) {
     fallbackChain: config.fallbackChain,
     rateLimit: config.rateLimit,
     createdAt: config.createdAt,
-    usage: await getUsage(sha256(gwKey), lastDays(7)),
+    usage: await getUsage(sha256(gwKey), lastDays(30)),
   });
 }
 
