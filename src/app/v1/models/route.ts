@@ -4,6 +4,7 @@ import { PROVIDERS } from "@/lib/providers/registry";
 import type { ProviderId } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 export async function GET(req: Request) {
   const gwKey = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();

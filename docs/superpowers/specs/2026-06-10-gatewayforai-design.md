@@ -57,10 +57,11 @@ await client.chat.completions.create({
   `groq/llama-3.3-70b`). The literal model name `"auto"` walks the config's
   fallback chain.
 - **Compatibility:** fully OpenAI-compatible request/response shape, including SSE
-  streaming. Anthropic and Gemini requests/responses are translated to/from
-  OpenAI format inside the gateway. OpenAI, Groq, Mistral, Together, DeepSeek,
-  and OpenRouter are natively OpenAI-compatible (base-URL + auth-header swap
-  plus model-name pass-through).
+  streaming. Anthropic requests/responses are translated to/from OpenAI format
+  inside the gateway. Gemini is reached through Google's official
+  OpenAI-compatible endpoint (no custom translator needed). OpenAI, Groq,
+  Mistral, Together, DeepSeek, and OpenRouter are natively OpenAI-compatible
+  (base-URL + auth-header swap plus model-name pass-through).
 - **Observability headers** on every response: `x-gateway-provider` (which
   provider answered), `x-gateway-fallback-count`, `x-gateway-latency-ms`.
 - `GET /v1/models` returns the union of models addressable through the caller's
