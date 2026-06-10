@@ -1,4 +1,4 @@
-import { getConfig } from "@/lib/config-store";
+import { resolveGatewayAuth } from "@/lib/config-store";
 import { errJson } from "@/lib/errors";
 import { PROVIDERS } from "@/lib/providers/registry";
 import type { ProviderId } from "@/lib/types";
@@ -8,8 +8,9 @@ export const maxDuration = 30;
 
 export async function GET(req: Request) {
   const gwKey = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  const config = gwKey.startsWith("gw_") ? await getConfig(gwKey) : null;
-  if (!config) return errJson(401, "invalid_api_key", "Unknown gateway key.");
+  const auth = gwKey.startsWith("gw_") ? await resolveGatewayAuth(gwKey) : null;
+  if (!auth) return errJson(401, "invalid_api_key", "Unknown gateway key.");
+  const config = auth.config;
 
   const entries = Object.entries(config.providers) as [ProviderId, string][];
   const lists = await Promise.all(
