@@ -70,7 +70,7 @@ export default function RouteDiagram() {
 
       {/* steady pulses to healthy providers */}
       {[0, 1, 4, 6].map((target, i) => (
-        <circle key={target} r="3.5" fill="#00ff88" filter="url(#glow)">
+        <circle key={target} r="3.5" fill="#00ff88" filter="url(#glow)" className="rd-pulse">
           <animateMotion dur="2.6s" begin={`${i * 0.65}s`} repeatCount="indefinite"
             path={path(ys[target])} />
           <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.9;1"
@@ -79,18 +79,18 @@ export default function RouteDiagram() {
       ))}
 
       {/* client → gateway feed pulses */}
-      <circle r="3.5" fill="#00ff88" filter="url(#glow)">
+      <circle r="3.5" fill="#00ff88" filter="url(#glow)" className="rd-pulse">
         <animateMotion dur="1.3s" repeatCount="indefinite" path="M 132 204 L 288 204" />
       </circle>
 
       {/* the reroute story: pulse heads to the DOWN provider in the first half of
           the 8s cycle, then visibly takes the next path during the outage window */}
-      <circle r="3.5" fill="#00ff88" filter="url(#glow)">
+      <circle r="3.5" fill="#00ff88" filter="url(#glow)" className="rd-pulse">
         <animateMotion dur="2s" begin="0s;reroute-a.end+6s" id="reroute-ok" path={path(ys[DOWN])} />
         <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.9;1" dur="2s"
           begin="0s;reroute-a.end+6s" />
       </circle>
-      <circle r="3.5" fill="#00ff88" filter="url(#glow)">
+      <circle r="3.5" fill="#00ff88" filter="url(#glow)" className="rd-pulse">
         <animateMotion dur="2s" begin="reroute-ok.end+2s" id="reroute-a" path={path(ys[DOWN + 1])} />
         <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.9;1" dur="2s"
           begin="reroute-ok.end+2s" />

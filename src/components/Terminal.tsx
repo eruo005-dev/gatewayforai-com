@@ -19,6 +19,10 @@ export default function Terminal() {
   const total = useRef(SCRIPT.reduce((n, s) => n + s.text.length, 0));
 
   useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setCount(total.current);
+      return;
+    }
     if (count >= total.current) return;
     const t = setTimeout(() => setCount((c) => c + 1), 18);
     return () => clearTimeout(t);

@@ -83,7 +83,7 @@ export default function Manage() {
   }
 
   return (
-    <div className="container" style={{ maxWidth: 780, padding: "48px 24px" }}>
+    <main className="container" style={{ maxWidth: 780, padding: "48px 24px" }}>
       <Link href="/" className="mono" style={{ color: "var(--muted)" }}>← gatewayforai</Link>
       <h1 style={{ marginTop: 16 }}>Manage your gateway</h1>
 
@@ -183,6 +183,6 @@ export default function Manage() {
           </div>
         </>
       )}
-    </div>
+    </main>
   );
 }

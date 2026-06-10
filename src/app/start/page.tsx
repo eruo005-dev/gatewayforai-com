@@ -116,7 +116,7 @@ res = client.chat.completions.create(
   if (gatewayKey) {
     const s = snippet(gatewayKey);
     return (
-      <div className="container" style={{ maxWidth: 780, padding: "48px 24px" }}>
+      <main className="container" style={{ maxWidth: 780, padding: "48px 24px" }}>
         <h1>Your gateway is live.</h1>
         <div className="panel">
           <h3>Gateway key — shown once, never again</h3>
@@ -135,12 +135,12 @@ res = client.chat.completions.create(
         <p style={{ color: "var(--muted)" }}>
           Manage this config any time at <Link href="/manage" style={{ color: "var(--accent)" }}>/manage</Link> using your key.
         </p>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="container" style={{ maxWidth: 780, padding: "48px 24px" }}>
+    <main className="container" style={{ maxWidth: 780, padding: "48px 24px" }}>
       <Link href="/" className="mono" style={{ color: "var(--muted)" }}>← gatewayforai</Link>
       <h1 style={{ marginTop: 16 }}>Create your gateway</h1>
       <p style={{ color: "var(--muted)", marginBottom: 32 }}>
@@ -210,6 +210,6 @@ res = client.chat.completions.create(
       <button className="btn primary" disabled={busy || chain.length === 0} onClick={create}>
         {busy ? "Creating…" : "Create gateway →"}
       </button>
-    </div>
+    </main>
   );
 }
