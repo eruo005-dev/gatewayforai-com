@@ -1,8 +1,7 @@
 import { after } from "next/server";
 import { redisBreaker } from "@/lib/breaker";
 import { cacheKeyFor, getCached, setCached } from "@/lib/cache";
-import { getConfig } from "@/lib/config-store";
-import { sha256 } from "@/lib/crypto";
+import { resolveGatewayAuth } from "@/lib/config-store";
 import { errJson } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { estimateCostUsd } from "@/lib/pricing";
@@ -32,28 +31,31 @@ export async function POST(req: Request) {
   if (!gwKey.startsWith("gw_")) {
     return errJson(401, "invalid_api_key", "Pass your gateway key as: Authorization: Bearer gw_live_...");
   }
-  const config = await getConfig(gwKey);
-  if (!config) return errJson(401, "invalid_api_key", "Unknown gateway key.");
-  const keyHash = sha256(gwKey);
+  const auth = await resolveGatewayAuth(gwKey);
+  if (!auth) return errJson(401, "invalid_api_key", "Unknown gateway key.");
 
-  const rl = await checkRateLimit(keyHash, config.rateLimit.rpm);
+  // keyHash = sub-key's own hash (own rate-limit buckets)
+  // parentHash = parent config hash (usage, breaker, cache)
+  const { config, keyHash, limits, parentHash } = auth;
+
+  const rl = await checkRateLimit(keyHash, limits.rpm);
   if (!rl.success) {
     return errJson(
       429,
       "rate_limit_exceeded",
-      `Rate limit of ${config.rateLimit.rpm} requests/min exceeded.`,
+      `Rate limit of ${limits.rpm} requests/min exceeded.`,
       undefined,
       { "retry-after": retryAfterSeconds(rl.reset) },
     );
   }
 
-  if (config.rateLimit.tpm) {
-    const tl = await checkTokenLimit(keyHash, config.rateLimit.tpm);
+  if (limits.tpm) {
+    const tl = await checkTokenLimit(keyHash, limits.tpm);
     if (!tl.success) {
       return errJson(
         429,
         "token_limit_exceeded",
-        `Token limit of ${config.rateLimit.tpm} tokens/min exceeded.`,
+        `Token limit of ${limits.tpm} tokens/min exceeded.`,
         undefined,
         { "retry-after": retryAfterSeconds(tl.reset) },
       );
@@ -90,6 +92,7 @@ export async function POST(req: Request) {
   const started = Date.now();
 
   // Opt-in response cache — only for non-streaming requests
+  // Cache keyed by parentHash: sub-keys share the parent's cache (same providers, safe)
   const cacheTtl = parseCacheTtl(req);
   const cacheable = cacheTtl !== null && !body.stream;
 
@@ -97,19 +100,23 @@ export async function POST(req: Request) {
   // (streaming + pass-through). Approximates input tokens as message bytes / 4.
   const estimatedTokens = Math.ceil(JSON.stringify(body.messages).length / 4);
 
+  // Breaker scoped to parentHash: shared provider health per config (correct semantics)
+  const breaker = redisBreaker(parentHash);
+
   if (cacheable) {
-    const cacheKey = cacheKeyFor(keyHash, body);
+    const cacheKey = cacheKeyFor(parentHash, body);
     const cached = await getCached(cacheKey);
     if (cached) {
       after(() =>
-        recordUsage(keyHash, {
+        recordUsage(parentHash, {
           provider: cached.provider,
           fallbacks: 0,
           error: false,
         }).catch(() => {}),
       );
       // Record token usage from cached body (parsed usage.total_tokens)
-      if (config.rateLimit.tpm) {
+      // Token limits per keyHash (sub-key budget)
+      if (limits.tpm) {
         try {
           const parsed = JSON.parse(cached.body);
           const total = parsed?.usage?.total_tokens;
@@ -136,10 +143,10 @@ export async function POST(req: Request) {
     }
 
     // Cache miss — run the request, read body text, cache async
-    const result = await routeRequest({ body, chain, keys: config.providers, breaker: redisBreaker(keyHash) });
+    const result = await routeRequest({ body, chain, keys: config.providers, breaker });
 
     after(() =>
-      recordUsage(keyHash, {
+      recordUsage(parentHash, {
         provider: result.provider === "none" ? undefined : result.provider,
         fallbacks: result.fallbacks,
         error: !result.response.ok,
@@ -172,8 +179,8 @@ export async function POST(req: Request) {
           const cost = estimateCostUsd(providerModel, parsed.usage);
           if (cost !== null) headers.set("x-gateway-cost-estimate-usd", String(cost));
         }
-        // Record actual token usage when available
-        if (config.rateLimit.tpm) {
+        // Record actual token usage when available — per keyHash (sub-key budget)
+        if (limits.tpm) {
           const total = parsed?.usage?.total_tokens;
           after(() =>
             recordTokens(
@@ -184,7 +191,7 @@ export async function POST(req: Request) {
         }
       } catch {
         // ignore parse errors — cost header is best-effort
-        if (config.rateLimit.tpm) {
+        if (limits.tpm) {
           after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
         }
       }
@@ -193,7 +200,7 @@ export async function POST(req: Request) {
 
     // Non-JSON or error response: pass through without caching
     // Use conservative estimate since we can't read the body
-    if (config.rateLimit.tpm) {
+    if (limits.tpm) {
       after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
     }
     return new Response(result.response.body, { status: result.response.status, headers });
@@ -201,10 +208,10 @@ export async function POST(req: Request) {
 
   // No caching — original pass-through path (streaming safe)
   // Use conservative estimate — body is not read here (would break streaming)
-  const result = await routeRequest({ body, chain, keys: config.providers, breaker: redisBreaker(keyHash) });
+  const result = await routeRequest({ body, chain, keys: config.providers, breaker });
 
   after(() =>
-    recordUsage(keyHash, {
+    recordUsage(parentHash, {
       provider: result.provider === "none" ? undefined : result.provider,
       fallbacks: result.fallbacks,
       error: !result.response.ok,
@@ -212,7 +219,7 @@ export async function POST(req: Request) {
   );
 
   // Conservative token approximation: messages JSON bytes / 4 (documents streaming limitation)
-  if (config.rateLimit.tpm) {
+  if (limits.tpm) {
     after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
   }
 

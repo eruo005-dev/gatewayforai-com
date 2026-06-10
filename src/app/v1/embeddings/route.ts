@@ -1,6 +1,5 @@
 import { after } from "next/server";
-import { getConfig } from "@/lib/config-store";
-import { sha256 } from "@/lib/crypto";
+import { resolveGatewayAuth } from "@/lib/config-store";
 import { errJson } from "@/lib/errors";
 import { PROVIDERS } from "@/lib/providers/registry";
 import { checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
@@ -19,16 +18,19 @@ export async function POST(req: Request) {
   if (!gwKey.startsWith("gw_")) {
     return errJson(401, "invalid_api_key", "Pass your gateway key as: Authorization: Bearer gw_live_...");
   }
-  const config = await getConfig(gwKey);
-  if (!config) return errJson(401, "invalid_api_key", "Unknown gateway key.");
-  const keyHash = sha256(gwKey);
+  const auth = await resolveGatewayAuth(gwKey);
+  if (!auth) return errJson(401, "invalid_api_key", "Unknown gateway key.");
 
-  const rl = await checkRateLimit(keyHash, config.rateLimit.rpm);
+  // keyHash = sub-key's own hash (own rate-limit buckets)
+  // parentHash = parent config hash (usage recorded there)
+  const { config, keyHash, limits, parentHash } = auth;
+
+  const rl = await checkRateLimit(keyHash, limits.rpm);
   if (!rl.success) {
     return errJson(
       429,
       "rate_limit_exceeded",
-      `Rate limit of ${config.rateLimit.rpm} requests/min exceeded.`,
+      `Rate limit of ${limits.rpm} requests/min exceeded.`,
       undefined,
       { "retry-after": retryAfterSeconds(rl.reset) },
     );
@@ -104,7 +106,7 @@ export async function POST(req: Request) {
   }
 
   after(() =>
-    recordUsage(keyHash, {
+    recordUsage(parentHash, {
       provider,
       fallbacks: 0,
       error: !response.ok,

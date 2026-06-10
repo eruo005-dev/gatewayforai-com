@@ -37,6 +37,10 @@ export function generateGatewayKey(): string {
   return "gw_live_" + randomBytes(24).toString("base64url");
 }
 
+export function generateSubKey(): string {
+  return "gw_sub_" + randomBytes(24).toString("base64url");
+}
+
 export function maskKey(k: string): string {
   return k.length <= 10 ? "••••" : `${k.slice(0, 5)}…${k.slice(-4)}`;
 }
