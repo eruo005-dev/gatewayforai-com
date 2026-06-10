@@ -1,7 +1,25 @@
 import { redis } from "./config-store";
 import { sha256 } from "./crypto";
 
-const CACHE_FIELDS = ["model", "messages", "temperature", "top_p", "max_tokens", "tools", "tool_choice"] as const;
+// Every field that can change the model's output must be part of the cache key,
+// otherwise two requests that differ only in (e.g.) response_format or seed would
+// collide and serve a poisoned response to the same tenant.
+const CACHE_FIELDS = [
+  "model",
+  "messages",
+  "temperature",
+  "top_p",
+  "max_tokens",
+  "stop",
+  "seed",
+  "response_format",
+  "frequency_penalty",
+  "presence_penalty",
+  "logit_bias",
+  "n",
+  "tools",
+  "tool_choice",
+] as const;
 
 export function cacheKeyFor(keyHash: string, body: Record<string, any>): string {
   const relevant: Record<string, unknown> = {};

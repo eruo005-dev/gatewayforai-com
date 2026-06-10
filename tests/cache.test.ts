@@ -46,6 +46,24 @@ describe("cacheKeyFor", () => {
   it("key starts with cache: prefix", () => {
     expect(cacheKeyFor(KEY_HASH, BODY_A)).toMatch(/^cache:/);
   });
+
+  it("differs by response_format → different cache key", () => {
+    const k1 = cacheKeyFor(KEY_HASH, { ...BODY_A, response_format: { type: "json_object" } });
+    const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, response_format: { type: "text" } });
+    expect(k1).not.toBe(k2);
+  });
+
+  it("differs by stop → different cache key", () => {
+    const k1 = cacheKeyFor(KEY_HASH, { ...BODY_A, stop: ["END"] });
+    const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, stop: ["STOP"] });
+    expect(k1).not.toBe(k2);
+  });
+
+  it("differs by seed → different cache key", () => {
+    const k1 = cacheKeyFor(KEY_HASH, { ...BODY_A, seed: 1 });
+    const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, seed: 2 });
+    expect(k1).not.toBe(k2);
+  });
 });
 
 describe("getCached / setCached round-trip", () => {

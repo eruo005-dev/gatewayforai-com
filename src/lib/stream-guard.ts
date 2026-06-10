@@ -23,9 +23,14 @@ export async function guardFirstToken(
 ): Promise<ReadableStream<Uint8Array>> {
   const reader = body.getReader();
   const buffered: Uint8Array[] = [];
-  // Rolling tail (last few decoded chars) so a `data:` split across chunk
-  // boundaries is still detected.
-  let tail = "";
+  // Line buffer holding the last (possibly partial) decoded line, so detection
+  // is line-anchored: we only commit on a COMPLETE line that starts with
+  // `data:` (the SSE spec). A `data:` substring mid-line (e.g. in a `:comment`
+  // preamble or inside JSON) must NOT commit. The partial trailing line is
+  // carried across chunk boundaries so a `data:` split mid-token still detects.
+  // (Raw chunks are re-emitted verbatim from `buffered`; this line buffer is
+  // detection-only and never alters the output.)
+  let lineBuf = "";
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
@@ -38,9 +43,12 @@ export async function guardFirstToken(
       if (done) throw new StreamDiedAtBirth();
       if (value) {
         buffered.push(value);
-        const text = tail + decoder.decode(value, { stream: true });
-        if (text.includes("data:")) return; // committed
-        tail = text.slice(-5);
+        lineBuf += decoder.decode(value, { stream: true });
+        const lines = lineBuf.split("\n");
+        // Keep the last (incomplete) line in the buffer for the next chunk.
+        lineBuf = lines.pop() ?? "";
+        // A COMPLETE line beginning with `data:` commits the stream.
+        if (lines.some((l) => l.startsWith("data:"))) return; // committed
       }
     }
   })();

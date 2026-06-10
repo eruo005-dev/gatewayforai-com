@@ -298,6 +298,37 @@ describe("toAnthropicResponse", () => {
   });
 });
 
+// These document the throw-cases that the /v1/messages route now catches and
+// re-shapes as Anthropic-shaped errors (BUG 1). fromAnthropicRequest DOES throw
+// on a malformed message entry (a non-object message → reading `.content` of
+// null/number throws TypeError). toAnthropicResponse is fully defensive and does
+// NOT throw even on missing/garbage `choices`, so the route's response-translation
+// guard is belt-and-suspenders. Verified by these assertions.
+describe("translator throw-surface (guarded by the /v1/messages route)", () => {
+  it("fromAnthropicRequest THROWS when a message entry is null (non-object)", () => {
+    expect(() =>
+      fromAnthropicRequest({ model: "m", max_tokens: 10, messages: [null as any] }),
+    ).toThrow();
+  });
+
+  it("fromAnthropicRequest does NOT throw on numeric content (flattens to '')", () => {
+    // Documented as defensive: numeric content flattens, it does not throw.
+    const out = fromAnthropicRequest({
+      model: "m",
+      max_tokens: 10,
+      messages: [{ role: "user", content: 5 as any }],
+    });
+    expect(out.messages).toEqual([{ role: "user", content: "" }]);
+  });
+
+  it("toAnthropicResponse does NOT throw when choices are missing (defensive)", () => {
+    expect(() => toAnthropicResponse({} as any, "m")).not.toThrow();
+    const out = toAnthropicResponse({} as any, "m");
+    expect(out.type).toBe("message");
+    expect(out.content).toEqual([]);
+  });
+});
+
 describe("toAnthropicSSE", () => {
   function openaiStream(chunks: object[]): ReadableStream<Uint8Array> {
     const enc = new TextEncoder();

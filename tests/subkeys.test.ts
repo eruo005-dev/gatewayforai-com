@@ -96,6 +96,39 @@ describe("resolveGatewayAuth — sub-key path", () => {
     expect(auth!.limits.tpm).toBe(50_000);
   });
 
+  it("clamps a sub-key rpm override that EXCEEDS the parent down to the parent", async () => {
+    // Parent rpm is 60; an override of 1000 must not escalate beyond the parent.
+    const subKey = await createSubKey(PARENT_KEY, { label: "greedy", rpm: 1000 });
+    const auth = await resolveGatewayAuth(subKey!);
+    expect(auth!.limits.rpm).toBe(60);
+  });
+
+  it("allows a sub-key rpm override that is TIGHTER than the parent", async () => {
+    const subKey = await createSubKey(PARENT_KEY, { label: "tight", rpm: 5 });
+    const auth = await resolveGatewayAuth(subKey!);
+    expect(auth!.limits.rpm).toBe(5);
+  });
+
+  it("clamps a sub-key tpm override that EXCEEDS a parent tpm down to the parent", async () => {
+    // Parent tpm is 50_000; override of 999_999 clamps to 50_000.
+    const subKey = await createSubKey(PARENT_KEY, { label: "greedy-tpm", tpm: 999_999 });
+    const auth = await resolveGatewayAuth(subKey!);
+    expect(auth!.limits.tpm).toBe(50_000);
+  });
+
+  it("allows a sub-key tpm override when the parent has NO tpm cap", async () => {
+    // Distinct parent with unlimited tpm: a sub-key tpm is a restriction, allow it.
+    const UNCAPPED_PARENT = "gw_live_uncapped";
+    await createConfig(UNCAPPED_PARENT, {
+      providers: { openai: "sk-openai-test" },
+      fallbackChain: [{ provider: "openai" as const, model: "gpt-4o" }],
+      rateLimit: { rpm: 60 },
+    });
+    const subKey = await createSubKey(UNCAPPED_PARENT, { label: "self-cap", tpm: 10_000 });
+    const auth = await resolveGatewayAuth(subKey!);
+    expect(auth!.limits.tpm).toBe(10_000);
+  });
+
   it("returns null after revoke", async () => {
     const subKey = await createSubKey(PARENT_KEY, { label: "temp" });
     const subHash = sha256(subKey!);

@@ -30,9 +30,17 @@ describe("crypto", () => {
     expect(generateGatewayKey()).not.toBe(k);
   });
 
-  it("masks keys to first-5 + last-4", () => {
-    expect(maskKey("sk-proj-abcdefgh1234x4Tz")).toBe("sk-pr…x4Tz");
+  it("masks long keys to first-4 + last-4", () => {
+    // 24 chars: first-4 "sk-p", last-4 "x4Tz".
+    expect(maskKey("sk-proj-abcdefgh1234x4Tz")).toBe("sk-p…x4Tz");
     expect(maskKey("short")).toBe("••••");
+  });
+
+  it("fully hides short keys (< 16 chars) rather than leaking most of them", () => {
+    // 14 chars: previously leaked first-5 + last-4 = most of the key.
+    expect(maskKey("sk-1234567890ab")).toBe("••••");
+    // 16 chars is the threshold where revealing 4+4 hides a meaningful middle.
+    expect(maskKey("0123456789abcdef")).toBe("0123…cdef");
   });
 
   it("rejects auth-tag tamper (byte in tag range flipped)", () => {

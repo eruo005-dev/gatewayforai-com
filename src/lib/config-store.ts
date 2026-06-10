@@ -262,13 +262,26 @@ export async function resolveGatewayAuth(key: string): Promise<GatewayAuthResult
       ),
     };
 
+    // Clamp sub-key overrides to the parent: a sub-key may only ever be a
+    // RESTRICTION, never an escalation. rpm is always min(override, parent).
+    // For tpm: if the parent has a cap, the effective tpm is min(override,
+    // parent). If the parent is uncapped (no tpm), a sub-key override still
+    // applies — capping yourself below "unlimited" is a restriction, not an
+    // escalation.
+    const parentRpm = stored.rateLimit.rpm;
+    const parentTpm = stored.rateLimit.tpm;
+    const effectiveRpm = Math.min(record.rpm ?? parentRpm, parentRpm);
+
+    let effectiveTpm: number | undefined;
+    if (parentTpm !== undefined) {
+      effectiveTpm = Math.min(record.tpm ?? parentTpm, parentTpm);
+    } else if (record.tpm !== undefined) {
+      effectiveTpm = record.tpm; // parent uncapped → sub-key may self-cap
+    }
+
     const limits: { rpm: number; tpm?: number } = {
-      rpm: record.rpm ?? stored.rateLimit.rpm,
-      ...(record.tpm !== undefined
-        ? { tpm: record.tpm }
-        : stored.rateLimit.tpm !== undefined
-          ? { tpm: stored.rateLimit.tpm }
-          : {}),
+      rpm: effectiveRpm,
+      ...(effectiveTpm !== undefined ? { tpm: effectiveTpm } : {}),
     };
 
     return {

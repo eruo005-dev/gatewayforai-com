@@ -41,6 +41,12 @@ export function generateSubKey(): string {
   return "gw_sub_" + randomBytes(24).toString("base64url");
 }
 
+/**
+ * Mask a secret for display: first-4 + last-4 with the middle hidden, but ONLY
+ * when the key is long enough (>= 16 chars) that a meaningful amount stays
+ * hidden. Real provider keys are >= 16 chars; anything shorter is fully hidden
+ * to avoid leaking most of a short key.
+ */
 export function maskKey(k: string): string {
-  return k.length <= 10 ? "••••" : `${k.slice(0, 5)}…${k.slice(-4)}`;
+  return k.length < 16 ? "••••" : `${k.slice(0, 4)}…${k.slice(-4)}`;
 }

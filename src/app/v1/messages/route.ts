@@ -92,12 +92,22 @@ export async function POST(req: Request) {
 
   const started = Date.now();
 
-  // Translate the inbound Anthropic body to an OpenAI chat-completions body for the gateway.
-  const openaiBody = fromAnthropicRequest(body);
-
-  // Conservative token estimate (input bytes / 4) — used for TPM accounting on
-  // streaming + non-JSON paths where the response body can't be read.
-  const estimatedTokens = Math.ceil(JSON.stringify(body.messages).length / 4);
+  // Translate the inbound Anthropic body to an OpenAI chat-completions body for
+  // the gateway. fromAnthropicRequest CAN throw on a malformed message entry
+  // (e.g. a non-object message — see tests/anthropic-inbound.test.ts), so wrap
+  // it: NO translator exception may escape to Next.js and produce a non-Anthropic
+  // default 500. estimatedTokens uses JSON.stringify which can also throw on a
+  // circular body, so guard it here too (it runs after validation).
+  let openaiBody: Record<string, any>;
+  let estimatedTokens: number;
+  try {
+    openaiBody = fromAnthropicRequest(body);
+    // Conservative token estimate (input bytes / 4) — used for TPM accounting on
+    // streaming + non-JSON paths where the response body can't be read.
+    estimatedTokens = Math.ceil(JSON.stringify(body.messages).length / 4);
+  } catch (e) {
+    return anthErr(500, "Request translation failed: " + (e as Error).message);
+  }
 
   // Breaker scoped to parentHash: shared provider health per config.
   const breaker = redisBreaker(parentHash);
@@ -130,7 +140,14 @@ export async function POST(req: Request) {
       const { status, message } = await upstreamError(result.response);
       return anthErr(status, message, gwHeaders);
     }
-    const anthropicStream = toAnthropicSSE(result.response.body, body.model);
+    // Guard the stream translation so a translator exception is surfaced as an
+    // Anthropic-shaped error rather than a Next.js default 500.
+    let anthropicStream: ReadableStream<Uint8Array>;
+    try {
+      anthropicStream = toAnthropicSSE(result.response.body, body.model);
+    } catch (e) {
+      return anthErr(502, "Response translation failed: " + (e as Error).message, gwHeaders);
+    }
     return new Response(anthropicStream, {
       status: 200,
       headers: { ...gwHeaders, "content-type": "text/event-stream" },
@@ -159,7 +176,16 @@ export async function POST(req: Request) {
         ).catch(() => {}),
       );
     }
-    return Response.json(toAnthropicResponse(parsed, body.model), { headers: gwHeaders });
+    // Guard the response translation. toAnthropicResponse is defensive and is
+    // not expected to throw (see tests/anthropic-inbound.test.ts), so this is
+    // belt-and-suspenders to guarantee NO path escapes to a Next.js 500.
+    let anthResponse: Record<string, any>;
+    try {
+      anthResponse = toAnthropicResponse(parsed, body.model);
+    } catch (e) {
+      return anthErr(502, "Response translation failed: " + (e as Error).message, gwHeaders);
+    }
+    return Response.json(anthResponse, { headers: gwHeaders });
   }
 
   // Upstream error — translate to an Anthropic-shaped error with the same status.

@@ -65,8 +65,28 @@ describe("guardFirstToken", () => {
     await expect(guardFirstToken(body, 30)).rejects.toBeInstanceOf(StreamDiedAtBirth);
   });
 
-  it("data: split across two chunks → still commits via rolling-tail check", async () => {
+  it("data: split across two chunks at line start → still commits", async () => {
     const input = ["da", 'ta: {"a":1}\n\n', "data: [DONE]\n\n"];
+    const guarded = await guardFirstToken(streamOf(input), 1000);
+    expect(await collect(guarded)).toBe(input.join(""));
+  });
+
+  it("preamble with mid-line 'data:' substring then close → throws (no false commit)", async () => {
+    // ": note about data: uris\n\n" contains the substring `data:` but NOT at
+    // the start of any line — the old includes() check would have falsely
+    // committed. With line-anchored detection this must die at birth.
+    const input = [": note about data: uris\n\n"];
+    await expect(guardFirstToken(streamOf(input), 1000)).rejects.toBeInstanceOf(StreamDiedAtBirth);
+  });
+
+  it("real 'data: {...}' line still commits; output byte-identical", async () => {
+    const input = ['data: {"a":1}\n\n', "data: [DONE]\n\n"];
+    const guarded = await guardFirstToken(streamOf(input), 1000);
+    expect(await collect(guarded)).toBe(input.join(""));
+  });
+
+  it("comment line containing 'data:' then a real data line → commits, both preserved", async () => {
+    const input = [": data: in a comment\n", "data: real\n\n"];
     const guarded = await guardFirstToken(streamOf(input), 1000);
     expect(await collect(guarded)).toBe(input.join(""));
   });
