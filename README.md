@@ -42,6 +42,28 @@ npm install && npm run dev   # tests: npm test
     `role:"tool"` results work across **all** providers including Anthropic — the gateway
     translates the full tool-calling protocol in both directions, including streaming
     (`tool_calls` deltas in `chat.completion.chunk` frames).
+- `POST /v1/messages` — **Anthropic-native endpoint.** Point the Anthropic SDK at the gateway
+  and route across all 8 providers in the Anthropic Messages format. Auth via `x-api-key`
+  (checked first) **or** `Authorization: Bearer` — both take your `gw_live_…` key. Model
+  addressing is the gateway's own: `"provider/model"` (e.g. `"openai/gpt-4o"`) or `"auto"`.
+  `tools`, `tool_choice`, and streaming (`stream: true`, translated back to Anthropic SSE
+  events) are supported. Same `x-gateway-*` response headers and `x-gateway-route` request
+  header as the chat route. All errors use the Anthropic error shape
+  (`{"type":"error","error":{…}}`). **No response cache on this route yet** — the
+  `x-gateway-cache` header is not wired here in v1.
+
+  ```js
+  import Anthropic from "@anthropic-ai/sdk";
+  const anthropic = new Anthropic({
+    apiKey: "gw_live_...",            // your gateway key (sent as x-api-key)
+    baseURL: "https://gatewayforai.com",
+  });
+  await anthropic.messages.create({
+    model: "auto",                    // or "anthropic/claude-sonnet-4-6", "openai/gpt-4o", …
+    max_tokens: 1024,
+    messages: [{ role: "user", content: "Hello" }],
+  });
+  ```
 - `GET /v1/models` — union of models from configured providers.
 - `POST /v1/embeddings` — proxy embeddings to any non-Anthropic provider. Requires explicit
   `provider/model` (e.g. `openai/text-embedding-3-small`); no `"auto"`. Response passes through

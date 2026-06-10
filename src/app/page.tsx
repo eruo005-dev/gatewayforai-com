@@ -6,7 +6,7 @@ const FEATURES = [
   ["[~>]", "Automatic fallback", "A provider returns 429 or 500? The request reroutes to the next provider in your chain mid-flight. Your request automatically retries the next provider in your chain."],
   ["[##]", "Rate limiting", "Per-key sliding-window limits you control. Protect your budget from runaway loops and abusive clients."],
   ["[8x]", "Eight providers", "OpenAI, Anthropic, Gemini, Groq, Mistral, Together, DeepSeek, OpenRouter — one endpoint, one key."],
-  ["[->]", "Drop-in compatible", "OpenAI SDK compatible. Change the baseURL and the key. That is the whole migration."],
+  ["[->]", "Drop-in compatible", "OpenAI SDK and Anthropic SDK compatible. Change the baseURL and the key. That is the whole migration."],
   ["[:|]", "Zero retention", "Your prompts and responses pass through and are gone. We store encrypted keys and counters — never content."],
   ["[no]", "No signup", "No account, no email, no sales call. Paste keys, get a gateway key, ship."],
 ] as const;
