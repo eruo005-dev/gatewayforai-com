@@ -7,6 +7,8 @@ import { errJson } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { estimateCostUsd } from "@/lib/pricing";
 import { checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
+import { sortChain } from "@/lib/routing";
+import type { RouteStrategy } from "@/lib/routing";
 import { recordUsage } from "@/lib/usage";
 
 export const runtime = "nodejs";
@@ -75,6 +77,16 @@ export async function POST(req: Request) {
     return errJson(400, "invalid_request_error", (e as Error).message);
   }
 
+  // x-gateway-route: "cheapest" | "fastest" — only applies when model === "auto"
+  const routeHeader = req.headers.get("x-gateway-route");
+  const routeStrategy =
+    (routeHeader === "cheapest" || routeHeader === "fastest") && body.model === "auto"
+      ? (routeHeader as RouteStrategy)
+      : null;
+  if (routeStrategy) {
+    chain = sortChain(chain, routeStrategy);
+  }
+
   const started = Date.now();
 
   // Opt-in response cache — only for non-streaming requests
@@ -118,6 +130,7 @@ export async function POST(req: Request) {
           "x-gateway-cache": "hit",
           "x-gateway-fallback-count": "0",
           "x-gateway-latency-ms": String(Date.now() - started),
+          ...(routeStrategy && { "x-gateway-route": routeStrategy }),
         },
       });
     }
@@ -137,6 +150,7 @@ export async function POST(req: Request) {
     headers.set("x-gateway-provider", result.provider);
     headers.set("x-gateway-fallback-count", String(result.fallbacks));
     headers.set("x-gateway-latency-ms", String(Date.now() - started));
+    if (routeStrategy) headers.set("x-gateway-route", routeStrategy);
 
     if (
       result.response.ok &&
@@ -206,5 +220,6 @@ export async function POST(req: Request) {
   headers.set("x-gateway-provider", result.provider);
   headers.set("x-gateway-fallback-count", String(result.fallbacks));
   headers.set("x-gateway-latency-ms", String(Date.now() - started));
+  if (routeStrategy) headers.set("x-gateway-route", routeStrategy);
   return new Response(result.response.body, { status: result.response.status, headers });
 }

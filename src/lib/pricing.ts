@@ -1,5 +1,5 @@
 /** USD per million tokens: { in: input price, out: output price } */
-const PRICES: Record<string, { in: number; out: number }> = {
+export const PRICES: Record<string, { in: number; out: number }> = {
   "openai/gpt-4o": { in: 2.5, out: 10 },
   "openai/gpt-4o-mini": { in: 0.15, out: 0.6 },
   "openai/gpt-4.1": { in: 2, out: 8 },

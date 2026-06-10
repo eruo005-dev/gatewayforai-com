@@ -31,6 +31,11 @@ npm install && npm run dev   # tests: npm test
   - **Cost estimate:** `x-gateway-cost-estimate-usd` header is set on cache-miss (non-streaming)
     responses when the model is in the pricing table. Streaming responses do not carry usage data
     and therefore do not include a cost estimate.
+  - **Cost/latency routing:** set request header `x-gateway-route: cheapest` or
+    `x-gateway-route: fastest` when `model` is `"auto"` to re-order the fallback chain before
+    the first attempt. `cheapest` sorts by total per-token cost (unknown-price models go last);
+    `fastest` sorts by static provider latency rank (groq → gemini → openai → …). The resolved
+    strategy is echoed back in the `x-gateway-route` response header.
   - **Tool/function calling:** OpenAI-style `tools`, `tool_choice`, assistant `tool_calls`, and
     `role:"tool"` results work across **all** providers including Anthropic — the gateway
     translates the full tool-calling protocol in both directions, including streaming
