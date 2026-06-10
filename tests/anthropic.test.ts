@@ -126,3 +126,241 @@ describe("translateAnthropicSSE", () => {
     expect(splitChoices).toEqual(wholeChoices);
   });
 });
+
+describe("toAnthropicBody — tools & tool_choice", () => {
+  it("translates tools and tool_choice:auto (input_schema present, type auto)", () => {
+    const out = toAnthropicBody({
+      model: "m",
+      messages: [{ role: "user", content: "Weather?" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Get weather",
+            parameters: { type: "object", properties: { city: { type: "string" } } },
+          },
+        },
+      ],
+      tool_choice: "auto",
+    });
+    expect(out.tools).toEqual([
+      {
+        name: "get_weather",
+        description: "Get weather",
+        input_schema: { type: "object", properties: { city: { type: "string" } } },
+      },
+    ]);
+    expect(out.tool_choice).toEqual({ type: "auto" });
+  });
+
+  it("maps tool_choice variants: specific function, required, none", () => {
+    const specific = toAnthropicBody({
+      model: "m",
+      messages: [{ role: "user", content: "x" }],
+      tools: [{ type: "function", function: { name: "get_weather", parameters: {} } }],
+      tool_choice: { type: "function", function: { name: "get_weather" } },
+    });
+    expect(specific.tool_choice).toEqual({ type: "tool", name: "get_weather" });
+
+    const required = toAnthropicBody({
+      model: "m",
+      messages: [{ role: "user", content: "x" }],
+      tools: [{ type: "function", function: { name: "get_weather", parameters: {} } }],
+      tool_choice: "required",
+    });
+    expect(required.tool_choice).toEqual({ type: "any" });
+
+    const none = toAnthropicBody({
+      model: "m",
+      messages: [{ role: "user", content: "x" }],
+      tools: [{ type: "function", function: { name: "get_weather", parameters: {} } }],
+      tool_choice: "none",
+    });
+    expect(none.tools).toBeUndefined();
+    expect(none.tool_choice).toBeUndefined();
+  });
+
+  it("omits tools and tool_choice when absent", () => {
+    const out = toAnthropicBody({ model: "m", messages: [{ role: "user", content: "x" }] });
+    expect(out.tools).toBeUndefined();
+    expect(out.tool_choice).toBeUndefined();
+  });
+});
+
+describe("toAnthropicBody — tool messages", () => {
+  it("translates assistant tool_calls into tool_use blocks (parsed input)", () => {
+    const out = toAnthropicBody({
+      model: "m",
+      messages: [
+        { role: "user", content: "Weather in Paris?" },
+        {
+          role: "assistant",
+          content: "Let me check.",
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "get_weather", arguments: '{"city":"Paris"}' } },
+          ],
+        },
+      ],
+    });
+    expect(out.messages[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Let me check." },
+        { type: "tool_use", id: "call_1", name: "get_weather", input: { city: "Paris" } },
+      ],
+    });
+  });
+
+  it("uses empty input object when tool_call arguments are malformed JSON", () => {
+    const out = toAnthropicBody({
+      model: "m",
+      messages: [
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "call_x", type: "function", function: { name: "f", arguments: "{not json" } }],
+        },
+      ],
+    });
+    expect(out.messages[0]).toEqual({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "call_x", name: "f", input: {} }],
+    });
+  });
+
+  it("merges consecutive tool messages into one user message with multiple tool_result blocks", () => {
+    const out = toAnthropicBody({
+      model: "m",
+      messages: [
+        { role: "tool", tool_call_id: "call_1", content: "sunny" },
+        { role: "tool", tool_call_id: "call_2", content: "windy" },
+      ],
+    });
+    expect(out.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "call_1", content: "sunny" },
+          { type: "tool_result", tool_use_id: "call_2", content: "windy" },
+        ],
+      },
+    ]);
+  });
+});
+
+describe("fromAnthropicResponse — tool_use", () => {
+  it("maps [text, tool_use] to content + tool_calls and finish_reason tool_calls", () => {
+    const out = fromAnthropicResponse(
+      {
+        id: "msg_1",
+        content: [
+          { type: "text", text: "Checking" },
+          { type: "tool_use", id: "tu1", name: "get_weather", input: { city: "Paris" } },
+        ],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 5, output_tokens: 3 },
+      },
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(out.choices[0].message.content).toBe("Checking");
+    expect(out.choices[0].message.tool_calls).toEqual([
+      { id: "tu1", type: "function", function: { name: "get_weather", arguments: '{"city":"Paris"}' } },
+    ]);
+    expect(out.choices[0].finish_reason).toBe("tool_calls");
+  });
+
+  it("sets content null when only tool_use blocks present", () => {
+    const out = fromAnthropicResponse(
+      {
+        id: "msg_1",
+        content: [{ type: "tool_use", id: "tu1", name: "f", input: {} }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(out.choices[0].message.content).toBeNull();
+    expect(out.choices[0].message.tool_calls).toHaveLength(1);
+    expect(out.choices[0].finish_reason).toBe("tool_calls");
+  });
+});
+
+describe("translateAnthropicSSE — tool_use streaming", () => {
+  function anthropicStream(events: object[]): ReadableStream<Uint8Array> {
+    const enc = new TextEncoder();
+    return new ReadableStream({
+      start(c) {
+        for (const e of events) c.enqueue(enc.encode(`data: ${JSON.stringify(e)}\n\n`));
+        c.close();
+      },
+    });
+  }
+  async function collect(stream: ReadableStream<Uint8Array>): Promise<string[]> {
+    const text = await new Response(stream).text();
+    return text.split("\n\n").filter(Boolean).map((l) => l.replace(/^data: /, ""));
+  }
+
+  it("emits tool_calls deltas for a single tool_use block", async () => {
+    const out = translateAnthropicSSE(
+      anthropicStream([
+        { type: "message_start", message: { id: "msg_1" } },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "tu1", name: "get_weather" },
+        },
+        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"city":' } },
+        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '"Paris"}' } },
+        { type: "message_delta", delta: { stop_reason: "tool_use" } },
+        { type: "message_stop" },
+      ]),
+      "anthropic/claude-sonnet-4-6",
+    );
+    const frames = await collect(out);
+    expect(frames.at(-1)).toBe("[DONE]");
+    const chunks = frames.slice(0, -1).map((f) => JSON.parse(f));
+
+    const start = chunks.find((c) => c.choices[0].delta.tool_calls?.[0]?.id);
+    expect(start.choices[0].delta.tool_calls).toEqual([
+      { index: 0, id: "tu1", type: "function", function: { name: "get_weather", arguments: "" } },
+    ]);
+
+    const argChunks = chunks.filter((c) => c.choices[0].delta.tool_calls?.[0]?.function?.arguments && !c.choices[0].delta.tool_calls?.[0]?.id);
+    expect(argChunks.map((c) => c.choices[0].delta.tool_calls[0].function.arguments)).toEqual(['{"city":', '"Paris"}']);
+    expect(argChunks.every((c) => c.choices[0].delta.tool_calls[0].index === 0)).toBe(true);
+
+    expect(chunks.find((c) => c.choices[0].finish_reason)?.choices[0].finish_reason).toBe("tool_calls");
+  });
+
+  it("keeps text and tool deltas separate (text index 0, tool index 1 → tool array index 0)", async () => {
+    const out = translateAnthropicSSE(
+      anthropicStream([
+        { type: "message_start", message: { id: "msg_1" } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hi" } },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", id: "tu1", name: "f" },
+        },
+        { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "{}" } },
+        { type: "message_delta", delta: { stop_reason: "tool_use" } },
+        { type: "message_stop" },
+      ]),
+      "anthropic/claude-sonnet-4-6",
+    );
+    const frames = await collect(out);
+    const chunks = frames.slice(0, -1).map((f) => JSON.parse(f));
+
+    const textChunk = chunks.find((c) => c.choices[0].delta.content === "Hi");
+    expect(textChunk.choices[0].delta.tool_calls).toBeUndefined();
+
+    const toolStart = chunks.find((c) => c.choices[0].delta.tool_calls?.[0]?.id === "tu1");
+    expect(toolStart.choices[0].delta.tool_calls[0].index).toBe(0); // first tool → array index 0
+    expect(toolStart.choices[0].delta.content).toBeUndefined();
+
+    const toolArg = chunks.find((c) => c.choices[0].delta.tool_calls?.[0]?.function?.arguments === "{}");
+    expect(toolArg.choices[0].delta.tool_calls[0].index).toBe(0);
+  });
+});

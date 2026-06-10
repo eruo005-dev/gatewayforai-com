@@ -31,6 +31,10 @@ npm install && npm run dev   # tests: npm test
   - **Cost estimate:** `x-gateway-cost-estimate-usd` header is set on cache-miss (non-streaming)
     responses when the model is in the pricing table. Streaming responses do not carry usage data
     and therefore do not include a cost estimate.
+  - **Tool/function calling:** OpenAI-style `tools`, `tool_choice`, assistant `tool_calls`, and
+    `role:"tool"` results work across **all** providers including Anthropic — the gateway
+    translates the full tool-calling protocol in both directions, including streaming
+    (`tool_calls` deltas in `chat.completion.chunk` frames).
 - `GET /v1/models` — union of models from configured providers.
 - `POST /v1/embeddings` — proxy embeddings to any non-Anthropic provider. Requires explicit
   `provider/model` (e.g. `openai/text-embedding-3-small`); no `"auto"`. Response passes through
