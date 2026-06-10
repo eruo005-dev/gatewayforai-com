@@ -130,6 +130,21 @@ describe("routeRequest", () => {
     ]);
   });
 
+  it("single-entry chain + transport error → 502 structured response", async () => {
+    const fetchFn = queuedFetch([new TypeError("fetch failed")]);
+    const r = await routeRequest({
+      body,
+      chain: [{ provider: "openai", model: "gpt-4o" }],
+      keys: KEYS,
+      fetchFn,
+    });
+    expect(r.response.status).toBe(502);
+    expect(r.provider).toBe("none");
+    const json = await r.response.json();
+    expect(json.error.attempts).toHaveLength(1);
+    expect(json.error.attempts[0].error).toBe("TypeError");
+  });
+
   it("attempts at most 4 chain entries", async () => {
     const longChain: ChainEntry[] = [
       { provider: "openai", model: "a" },
