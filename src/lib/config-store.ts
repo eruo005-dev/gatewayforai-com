@@ -14,7 +14,12 @@ function safeDecrypt(ct: string): string {
 let _redis: Redis | null = null;
 
 export function redis(): Redis {
-  return (_redis ??= Redis.fromEnv());
+  // Supports both naming schemes: UPSTASH_REDIS_REST_* (direct Upstash) and
+  // KV_REST_API_* (injected by the Vercel marketplace Upstash integration).
+  return (_redis ??= new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL ?? process.env.KV_REST_API_URL ?? "",
+    token: process.env.UPSTASH_REDIS_REST_TOKEN ?? process.env.KV_REST_API_TOKEN ?? "",
+  }));
 }
 
 export function setRedisForTests(r: Redis) {
