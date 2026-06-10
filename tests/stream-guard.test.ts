@@ -1,0 +1,73 @@
+import { describe, it, expect } from "vitest";
+import { guardFirstToken, StreamDiedAtBirth } from "@/lib/stream-guard";
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+/** Builds a ReadableStream that emits each chunk (string → bytes) in order, then closes. */
+function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
+  let i = 0;
+  return new ReadableStream({
+    pull(c) {
+      if (i < chunks.length) c.enqueue(enc.encode(chunks[i++]));
+      else c.close();
+    },
+  });
+}
+
+/** Collects a stream into a single decoded string. */
+async function collect(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  let out = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out += dec.decode(value, { stream: true });
+  }
+  out += dec.decode();
+  return out;
+}
+
+describe("guardFirstToken", () => {
+  it("data: in first chunk → resolves; output identical to input", async () => {
+    const input = ['data: {"a":1}\n\n', 'data: {"b":2}\n\n', "data: [DONE]\n\n"];
+    const guarded = await guardFirstToken(streamOf(input), 1000);
+    expect(await collect(guarded)).toBe(input.join(""));
+  });
+
+  it("preamble (: ping) then data → resolves; preserves preamble + data + rest in order", async () => {
+    const input = [": ping\n\n", 'data: {"a":1}\n\n', 'data: {"b":2}\n\n'];
+    const guarded = await guardFirstToken(streamOf(input), 1000);
+    expect(await collect(guarded)).toBe(input.join(""));
+  });
+
+  it("stream closes after zero data frames → throws StreamDiedAtBirth", async () => {
+    const input = [": ping\n\n", ": keep-alive\n\n"];
+    await expect(guardFirstToken(streamOf(input), 1000)).rejects.toBeInstanceOf(StreamDiedAtBirth);
+  });
+
+  it("stream errors immediately → throws StreamDiedAtBirth", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("boom");
+      },
+    });
+    await expect(guardFirstToken(body, 1000)).rejects.toBeInstanceOf(StreamDiedAtBirth);
+  });
+
+  it("timeout on hanging stream → throws StreamDiedAtBirth", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        // never enqueues, never closes
+        return new Promise<void>(() => {});
+      },
+    });
+    await expect(guardFirstToken(body, 30)).rejects.toBeInstanceOf(StreamDiedAtBirth);
+  });
+
+  it("data: split across two chunks → still commits via rolling-tail check", async () => {
+    const input = ["da", 'ta: {"a":1}\n\n', "data: [DONE]\n\n"];
+    const guarded = await guardFirstToken(streamOf(input), 1000);
+    expect(await collect(guarded)).toBe(input.join(""));
+  });
+});

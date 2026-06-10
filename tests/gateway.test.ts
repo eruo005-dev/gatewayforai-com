@@ -211,4 +211,81 @@ describe("routeRequest", () => {
     const json = await r.response.json();
     expect(json.error.attempts.every((a: any) => a.error === "BreakerOpen")).toBe(true);
   });
+
+  // --- First-token streaming failover ---
+
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  /** 200 SSE response whose body emits each chunk then closes (zero chunks = dies at birth). */
+  function sseResponse(chunks: string[]): Response {
+    let i = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (i < chunks.length) c.enqueue(enc.encode(chunks[i++]));
+        else c.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
+
+  async function collectBody(res: Response): Promise<string> {
+    const reader = res.body!.getReader();
+    let out = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += dec.decode(value, { stream: true });
+    }
+    return out + dec.decode();
+  }
+
+  const streamBody = { ...body, stream: true };
+
+  it("streaming: provider A returns 200 SSE that dies at birth → falls back to B", async () => {
+    const fetchFn = queuedFetch([
+      sseResponse([]), // openai: zero frames, dies at birth
+      sseResponse(['data: {"id":"ok"}\n\n']),
+    ]);
+    const r = await routeRequest({ body: streamBody, chain: CHAIN, keys: KEYS, fetchFn });
+    expect(r.provider).toBe("groq");
+    expect(r.fallbacks).toBe(1);
+  });
+
+  it("streaming: provider A returns 200 SSE with frames → passes through with body intact", async () => {
+    const frames = ['data: {"a":1}\n\n', 'data: {"b":2}\n\n', "data: [DONE]\n\n"];
+    const fetchFn = queuedFetch([sseResponse(frames)]);
+    const r = await routeRequest({ body: streamBody, chain: CHAIN, keys: KEYS, fetchFn });
+    expect(r.provider).toBe("openai");
+    expect(r.fallbacks).toBe(0);
+    expect(await collectBody(r.response)).toBe(frames.join(""));
+  });
+
+  it("streaming: single-entry chain + dead-at-birth stream passes through as-is (no failover)", async () => {
+    const fetchFn = queuedFetch([sseResponse([])]);
+    const r = await routeRequest({
+      body: streamBody,
+      chain: [{ provider: "openai", model: "gpt-4o" }],
+      keys: KEYS,
+      fetchFn,
+    });
+    expect(r.provider).toBe("openai");
+    expect(r.fallbacks).toBe(0);
+    expect(r.response.status).toBe(200);
+    expect(await collectBody(r.response)).toBe("");
+  });
+
+  it("streaming: breaker.onFailure fires for the dead-at-birth provider", async () => {
+    const b = fakeBreaker();
+    const fetchFn = queuedFetch([
+      sseResponse([]), // openai dies at birth
+      sseResponse(['data: {"id":"ok"}\n\n']),
+    ]);
+    await routeRequest({ body: streamBody, chain: CHAIN, keys: KEYS, fetchFn, breaker: b.hooks });
+    expect(b.failures).toEqual(["openai"]);
+    expect(b.successes).toEqual(["groq"]);
+  });
 });

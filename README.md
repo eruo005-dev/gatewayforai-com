@@ -42,6 +42,10 @@ npm install && npm run dev   # tests: npm test
     `role:"tool"` results work across **all** providers including Anthropic — the gateway
     translates the full tool-calling protocol in both directions, including streaming
     (`tool_calls` deltas in `chat.completion.chunk` frames).
+  - **First-token streaming failover:** for `"auto"`/multi-provider chains, fallback triggers
+    before the first token — a provider that accepts the request but never produces output
+    (200 + `text/event-stream` then a dead body) fails over automatically. Once output starts,
+    the stream is committed and passes through; a connection that dies mid-stream is not retried.
 - `POST /v1/messages` — **Anthropic-native endpoint.** Point the Anthropic SDK at the gateway
   and route across all 8 providers in the Anthropic Messages format. Auth via `x-api-key`
   (checked first) **or** `Authorization: Bearer` — both take your `gw_live_…` key. Model

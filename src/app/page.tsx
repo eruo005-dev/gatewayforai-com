@@ -20,7 +20,7 @@ const FAQ = [
   ["I lost my gateway key.", "Keys cannot be recovered (we only store a hash). Create a new config at /start — it takes 30 seconds."],
   ["What happens if someone steals my gateway key?", "They can make requests through your configured providers (spending your provider credits) until you act — they can never read your raw provider keys, which are encrypted and never returned by any endpoint. Rotate or delete the config at /manage the moment you suspect a leak."],
   ["Will it stay free?", "The gateway is free during beta. If that changes, existing gateways will keep working and you'll see pricing on this page well in advance — your provider keys and traffic stay yours either way."],
-  ["Does fallback work mid-stream?", "Fallback triggers on errors and timeouts before the first byte of a response. Once a provider starts streaming, the stream is passed through — a connection that dies mid-stream is not retried (yet)."],
+  ["Does fallback work mid-stream?", "Fallback triggers on errors and timeouts before the first token — a provider that accepts the request but never produces output (a stream that dies at birth) fails over to the next provider automatically. Once output starts, the stream is committed and passes through; a connection that dies mid-stream is not retried (yet)."],
   ["Who runs this — and why is it free?", "GatewayforAI is built and operated by an independent developer — no VC, no acquisition exit to worry about. It stays free during beta because BYOK keeps our costs near zero: you bring the provider keys, we only route requests. The entire codebase is open source on GitHub, and /api/health is public if you want to wire up your own uptime monitoring."],
 ] as const;
 

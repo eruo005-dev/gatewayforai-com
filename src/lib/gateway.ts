@@ -1,11 +1,13 @@
 import { errJson } from "./errors";
 import { callProvider } from "./providers/call";
 import { PROVIDERS } from "./providers/registry";
+import { guardFirstToken, StreamDiedAtBirth } from "./stream-guard";
 import type { BreakerHooks } from "./breaker";
 import type { ChainEntry, ProviderId } from "./types";
 
 const MAX_ATTEMPTS = 4; // primary + 3 fallback hops (spec §4)
 const DEFAULT_TIMEOUT_MS = 25_000;
+const FIRST_TOKEN_TIMEOUT_MS = 10_000;
 
 export interface RouteOpts {
   body: Record<string, any>;
@@ -95,6 +97,37 @@ export async function routeRequest(opts: RouteOpts): Promise<GatewayResult> {
       const passThrough =
         response.ok || !isRetryable(response.status) || chain.length === 1;
       if (passThrough) {
+        // First-token streaming guard: for multi-entry chains, hold a streamed
+        // 200 response until its first SSE data frame arrives. A stream that
+        // dies at birth (zero frames) is a retryable failure and advances the
+        // chain; once committed, it passes through (buffered frames re-emitted).
+        // Single-entry chains, non-streaming, and non-ok responses are unguarded.
+        if (body.stream && response.ok && chain.length > 1 && response.body) {
+          try {
+            const guarded = await guardFirstToken(response.body, FIRST_TOKEN_TIMEOUT_MS);
+            if (breaker) void breaker.onSuccess(entry.provider).catch(() => {});
+            return {
+              response: new Response(guarded, {
+                status: response.status,
+                headers: response.headers,
+              }),
+              provider: entry.provider,
+              fallbacks: i,
+            };
+          } catch (e) {
+            if (e instanceof StreamDiedAtBirth) {
+              void breaker?.onFailure(entry.provider).catch(() => {});
+              attempts.push({
+                provider: entry.provider,
+                model: entry.model,
+                status: 0,
+                error: "StreamDiedAtBirth",
+              });
+              continue; // next provider
+            }
+            throw e;
+          }
+        }
         if (breaker && response.ok) void breaker.onSuccess(entry.provider).catch(() => {});
         return { response, provider: entry.provider, fallbacks: i };
       }
