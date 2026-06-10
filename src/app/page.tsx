@@ -3,7 +3,7 @@ import RouteDiagram from "@/components/RouteDiagram";
 import Terminal from "@/components/Terminal";
 
 const FEATURES = [
-  ["[~>]", "Automatic fallback", "A provider returns 429 or 500? The request reroutes to the next provider in your chain mid-flight. Your users never see the outage."],
+  ["[~>]", "Automatic fallback", "A provider returns 429 or 500? The request reroutes to the next provider in your chain mid-flight. Your request automatically retries the next provider in your chain."],
   ["[##]", "Rate limiting", "Per-key sliding-window limits you control. Protect your budget from runaway loops and abusive clients."],
   ["[8x]", "Eight providers", "OpenAI, Anthropic, Gemini, Groq, Mistral, Together, DeepSeek, OpenRouter — one endpoint, one key."],
   ["[->]", "Drop-in compatible", "OpenAI SDK compatible. Change the baseURL and the key. That is the whole migration."],
@@ -18,11 +18,15 @@ const FAQ = [
   ["Does streaming work?", "Yes. SSE streaming passes straight through, including for Anthropic models (translated to OpenAI chunk format on the fly)."],
   ["What does it cost?", "The gateway is free. You pay your providers directly with your own keys — we never touch your billing."],
   ["I lost my gateway key.", "Keys cannot be recovered (we only store a hash). Create a new config at /start — it takes 30 seconds."],
+  ["What happens if someone steals my gateway key?", "They can make requests through your configured providers (spending your provider credits) until you act — they can never read your raw provider keys, which are encrypted and never returned by any endpoint. Rotate or delete the config at /manage the moment you suspect a leak."],
+  ["Will it stay free?", "The gateway is free during beta. If that changes, existing gateways will keep working and you'll see pricing on this page well in advance — your provider keys and traffic stay yours either way."],
+  ["Does fallback work mid-stream?", "Fallback triggers on errors and timeouts before the first byte of a response. Once a provider starts streaming, the stream is passed through — a connection that dies mid-stream is not retried (yet)."],
 ] as const;
 
 export default function Home() {
   return (
     <>
+      <a href="#main" className="skip-link">Skip to content</a>
       <div className="container">
         <nav className="nav">
           <Link href="/" className="logo">gateway<span>for</span>ai</Link>
@@ -34,9 +38,12 @@ export default function Home() {
             <Link href="/start" style={{ color: "var(--accent)" }}>Get started →</Link>
           </div>
         </nav>
+      </div>
 
+      <main id="main">
+      <div className="container">
         <section className="hero">
-          <h1>One endpoint.<br />Eight providers.<br /><em>Zero downtime.</em></h1>
+          <h1>One endpoint.<br />Eight providers.<br /><em>Failover built in.</em></h1>
           <p className="sub">
             An OpenAI-compatible LLM gateway with automatic fallback routing and
             rate limiting. Bring your own keys. No signup, no markup, no stored prompts.
@@ -134,12 +141,13 @@ export default function Home() {
           </div>
         </div>
       </section>
+      </main>
 
       <footer>
         <div className="container">
           <span className="mono">gateway<span style={{ color: "var(--accent)" }}>for</span>ai © 2026</span>
           <span>
-            <Link href="/privacy">Privacy</Link> · <Link href="/start">Get started</Link> · <Link href="/manage">Manage</Link>
+            <Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link> · <a href="https://github.com/eruo005-dev/gatewayforai-com">GitHub</a> · <Link href="/start">Get started</Link> · <Link href="/manage">Manage</Link>
           </span>
         </div>
       </footer>

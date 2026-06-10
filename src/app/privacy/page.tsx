@@ -4,7 +4,7 @@ export const metadata = { title: "Privacy — GatewayforAI" };
 
 export default function Privacy() {
   return (
-    <div className="container" style={{ maxWidth: 720, padding: "48px 24px" }}>
+    <main className="container" style={{ maxWidth: 720, padding: "48px 24px" }}>
       <Link href="/" className="mono" style={{ color: "var(--muted)" }}>← gatewayforai</Link>
       <h1 style={{ marginTop: 16 }}>Privacy</h1>
       <p style={{ color: "var(--muted)" }}>The short version: we are a pipe, not a database.</p>
@@ -13,7 +13,11 @@ export default function Privacy() {
       <p style={{ color: "var(--muted)" }}>
         Your prompts, your model responses, your users&apos; data. Requests stream through the
         gateway to the provider you chose and are gone. There is no logging of request or
-        response bodies, anywhere, ever.
+        response bodies, anywhere, ever. Don&apos;t take our word for it — the gateway is open
+        source; verify at{" "}
+        <a href="https://github.com/eruo005-dev/gatewayforai-com" style={{ color: "var(--accent)" }}>
+          github.com/eruo005-dev/gatewayforai-com
+        </a>.
       </p>
 
       <h2 style={{ fontSize: 20 }}>What we store</h2>
@@ -36,6 +40,6 @@ export default function Privacy() {
         Hosting: Vercel. Storage: Upstash (Redis). Your traffic additionally reaches the LLM
         providers you configured, under their terms.
       </p>
-    </div>
+    </main>
   );
 }
