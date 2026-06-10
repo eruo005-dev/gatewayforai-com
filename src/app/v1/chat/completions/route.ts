@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { redisBreaker } from "@/lib/breaker";
 import { getConfig } from "@/lib/config-store";
 import { sha256 } from "@/lib/crypto";
 import { errJson } from "@/lib/errors";
@@ -51,7 +52,7 @@ export async function POST(req: Request) {
   }
 
   const started = Date.now();
-  const result = await routeRequest({ body, chain, keys: config.providers });
+  const result = await routeRequest({ body, chain, keys: config.providers, breaker: redisBreaker(keyHash) });
 
   after(() =>
     recordUsage(keyHash, {

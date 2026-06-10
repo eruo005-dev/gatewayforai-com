@@ -7,6 +7,12 @@ export class FakeRedis {
   async set(k: string, v: unknown) { this.store.set(k, v); return "OK"; }
   async del(k: string) { return this.store.delete(k) ? 1 : 0; }
 
+  async incr(k: string) {
+    const v = Number(this.store.get(k) ?? 0) + 1;
+    this.store.set(k, v);
+    return v;
+  }
+
   async hincrby(k: string, field: string, by: number) {
     const h = this.hashes.get(k) ?? new Map();
     h.set(field, (h.get(field) ?? 0) + by);

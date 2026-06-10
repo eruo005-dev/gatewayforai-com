@@ -158,4 +158,57 @@ describe("routeRequest", () => {
     await routeRequest({ body, chain: longChain, keys, fetchFn: fetchFn as unknown as typeof fetch });
     expect(fetchFn).toHaveBeenCalledTimes(4);
   });
+
+  // --- Circuit breaker tests ---
+
+  function fakeBreaker(open: string[] = []) {
+    const failures: string[] = [];
+    const successes: string[] = [];
+    return {
+      hooks: {
+        isOpen: async (p: string) => open.includes(p),
+        onFailure: async (p: string) => { failures.push(p); },
+        onSuccess: async (p: string) => { successes.push(p); },
+      },
+      failures,
+      successes,
+    };
+  }
+
+  it("skips providers whose breaker is open", async () => {
+    const b = fakeBreaker(["openai"]);
+    const fetchFn = queuedFetch([Response.json({ id: "ok" })]);
+    const r = await routeRequest({ body, chain: CHAIN, keys: KEYS, fetchFn, breaker: b.hooks });
+    expect(r.provider).toBe("groq");
+    expect(r.fallbacks).toBe(1); // openai counted as a skipped attempt
+  });
+
+  it("records failures and successes on the breaker", async () => {
+    const b = fakeBreaker();
+    const fetchFn = queuedFetch([
+      Response.json({ e: 1 }, { status: 500 }),
+      Response.json({ id: "ok" }),
+    ]);
+    await routeRequest({ body, chain: CHAIN, keys: KEYS, fetchFn, breaker: b.hooks });
+    expect(b.failures).toEqual(["openai"]);
+    expect(b.successes).toEqual(["groq"]);
+  });
+
+  it("ignores the breaker for single-entry chains", async () => {
+    const b = fakeBreaker(["openai"]);
+    const fetchFn = queuedFetch([Response.json({ id: "ok" })]);
+    const r = await routeRequest({
+      body, chain: [{ provider: "openai", model: "gpt-4o" }], keys: KEYS, fetchFn, breaker: b.hooks,
+    });
+    expect(r.provider).toBe("openai");
+  });
+
+  it("all-open breakers → 502 with BreakerOpen attempts", async () => {
+    const b = fakeBreaker(["openai", "groq", "gemini"]);
+    const fetchFn = queuedFetch([]);
+    const r = await routeRequest({ body, chain: CHAIN, keys: KEYS, fetchFn, breaker: b.hooks });
+    expect(r.response.status).toBe(502);
+    const json = await r.response.json();
+    expect(json.error.attempts.every((a: any) => a.error === "BreakerOpen")).toBe(true);
+  });
 });

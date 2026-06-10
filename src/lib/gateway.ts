@@ -1,6 +1,7 @@
 import { errJson } from "./errors";
 import { callProvider } from "./providers/call";
 import { PROVIDERS } from "./providers/registry";
+import type { BreakerHooks } from "./breaker";
 import type { ChainEntry, ProviderId } from "./types";
 
 const MAX_ATTEMPTS = 4; // primary + 3 fallback hops (spec §4)
@@ -12,6 +13,7 @@ export interface RouteOpts {
   keys: Partial<Record<ProviderId, string>>;
   fetchFn?: typeof fetch;
   timeoutMs?: number;
+  breaker?: BreakerHooks;
 }
 
 export interface GatewayResult {
@@ -58,12 +60,29 @@ function isRetryable(status: number): boolean {
 }
 
 export async function routeRequest(opts: RouteOpts): Promise<GatewayResult> {
-  const { body, chain, keys, fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
+  const { body, chain, keys, fetchFn = fetch, timeoutMs = DEFAULT_TIMEOUT_MS, breaker } = opts;
   const attempts: Attempt[] = [];
   const max = Math.min(chain.length, MAX_ATTEMPTS);
+  const useBreaker = breaker != null && chain.length > 1;
 
   for (let i = 0; i < max; i++) {
     const entry = chain[i];
+
+    // Check breaker for multi-entry chains — single-entry chains bypass entirely.
+    if (useBreaker) {
+      let open = false;
+      try {
+        open = await breaker!.isOpen(entry.provider);
+      } catch {
+        // On breaker error, treat as closed and attempt the provider normally.
+        open = false;
+      }
+      if (open) {
+        attempts.push({ provider: entry.provider, model: entry.model, status: 0, error: "BreakerOpen" });
+        continue;
+      }
+    }
+
     try {
       const response = await callProvider({
         provider: entry.provider,
@@ -75,8 +94,12 @@ export async function routeRequest(opts: RouteOpts): Promise<GatewayResult> {
       });
       const passThrough =
         response.ok || !isRetryable(response.status) || chain.length === 1;
-      if (passThrough) return { response, provider: entry.provider, fallbacks: i };
+      if (passThrough) {
+        if (breaker && response.ok) void breaker.onSuccess(entry.provider).catch(() => {});
+        return { response, provider: entry.provider, fallbacks: i };
+      }
       attempts.push({ provider: entry.provider, model: entry.model, status: response.status });
+      void breaker?.onFailure(entry.provider).catch(() => {});
     } catch (e) {
       attempts.push({
         provider: entry.provider,
@@ -84,6 +107,7 @@ export async function routeRequest(opts: RouteOpts): Promise<GatewayResult> {
         status: 0,
         error: (e as Error).constructor.name,
       });
+      void breaker?.onFailure(entry.provider).catch(() => {});
     }
   }
 
