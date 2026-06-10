@@ -2,12 +2,15 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 
 const ALG = "aes-256-gcm";
 
+let _masterKey: Buffer | undefined;
 function masterKey(): Buffer {
+  if (_masterKey) return _masterKey;
   const hex = process.env.MASTER_KEY;
   if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new Error("MASTER_KEY env var must be 64 hex characters");
   }
-  return Buffer.from(hex, "hex");
+  _masterKey = Buffer.from(hex, "hex");
+  return _masterKey;
 }
 
 /** AES-256-GCM. Output layout: base64( IV(12) | authTag(16) | ciphertext ). */
@@ -20,6 +23,7 @@ export function encrypt(plain: string): string {
 
 export function decrypt(blob: string): string {
   const buf = Buffer.from(blob, "base64");
+  if (buf.length < 29) throw new Error("ciphertext too short");
   const decipher = createDecipheriv(ALG, masterKey(), buf.subarray(0, 12));
   decipher.setAuthTag(buf.subarray(12, 28));
   return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8");

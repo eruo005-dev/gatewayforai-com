@@ -34,4 +34,15 @@ describe("crypto", () => {
     expect(maskKey("sk-proj-abcdefgh1234x4Tz")).toBe("sk-pr…x4Tz");
     expect(maskKey("short")).toBe("••••");
   });
+
+  it("rejects auth-tag tamper (byte in tag range flipped)", () => {
+    const ct = encrypt("secret");
+    const buf = Buffer.from(ct, "base64");
+    buf[15] ^= 0xff; // byte 15 is within the auth-tag range (bytes 12-27)
+    expect(() => decrypt(buf.toString("base64"))).toThrow();
+  });
+
+  it("rejects ciphertext that is too short", () => {
+    expect(() => decrypt("AAAA")).toThrow("ciphertext too short");
+  });
 });
