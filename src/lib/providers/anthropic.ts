@@ -78,26 +78,32 @@ export function translateAnthropicSSE(
       })}\n\n`,
     );
 
+  const processLine = (line: string, controller: TransformStreamDefaultController<Uint8Array>) => {
+    if (!line.startsWith("data:")) return;
+    let evt: Record<string, any>;
+    try { evt = JSON.parse(line.slice(5).trim()); } catch { return; }
+    if (evt.type === "message_start") {
+      controller.enqueue(frame({ role: "assistant", content: "" }));
+    } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
+      controller.enqueue(frame({ content: evt.delta.text }));
+    } else if (evt.type === "message_delta" && evt.delta?.stop_reason) {
+      controller.enqueue(frame({}, mapStop(evt.delta.stop_reason)));
+    } else if (evt.type === "message_stop") {
+      controller.enqueue(enc.encode("data: [DONE]\n\n"));
+    }
+  };
+
   return upstream.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
       transform(part, controller) {
         buffer += dec.decode(part, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          let evt: Record<string, any>;
-          try { evt = JSON.parse(line.slice(5).trim()); } catch { continue; }
-          if (evt.type === "message_start") {
-            controller.enqueue(frame({ role: "assistant", content: "" }));
-          } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
-            controller.enqueue(frame({ content: evt.delta.text }));
-          } else if (evt.type === "message_delta" && evt.delta?.stop_reason) {
-            controller.enqueue(frame({}, mapStop(evt.delta.stop_reason)));
-          } else if (evt.type === "message_stop") {
-            controller.enqueue(enc.encode("data: [DONE]\n\n"));
-          }
-        }
+        for (const line of lines) processLine(line, controller);
+      },
+      flush(controller) {
+        const remaining = buffer.trim();
+        if (remaining) processLine(remaining, controller);
       },
     }),
   );

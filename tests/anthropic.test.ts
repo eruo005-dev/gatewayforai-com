@@ -91,4 +91,38 @@ describe("translateAnthropicSSE", () => {
     expect(chunks[3].choices[0].finish_reason).toBe("stop");
     expect(chunks.every((c) => c.object === "chat.completion.chunk")).toBe(true);
   });
+
+  it("produces identical frames when input is split mid-frame across two chunks", async () => {
+    const enc = new TextEncoder();
+    const events = [
+      { type: "message_start", message: { id: "msg_01" } },
+      { type: "content_block_delta", delta: { type: "text_delta", text: "Hel" } },
+      { type: "content_block_delta", delta: { type: "text_delta", text: "lo" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" } },
+      { type: "message_stop" },
+    ];
+    const full = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+    const mid = Math.floor(full.length / 2);
+    const splitStream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode(full.slice(0, mid)));
+        c.enqueue(enc.encode(full.slice(mid)));
+        c.close();
+      },
+    });
+
+    const [whole, split] = await Promise.all([
+      collect(translateAnthropicSSE(anthropicStream(events), "anthropic/claude-sonnet-4-6")),
+      collect(translateAnthropicSSE(splitStream, "anthropic/claude-sonnet-4-6")),
+    ]);
+
+    // Same number of frames
+    expect(split.length).toBe(whole.length);
+    // [DONE] at the end
+    expect(split.at(-1)).toBe("[DONE]");
+    // Parse and compare payloads structurally (id/created differ between calls, so compare choices only)
+    const wholeChoices = whole.slice(0, -1).map((f) => JSON.parse(f).choices);
+    const splitChoices = split.slice(0, -1).map((f) => JSON.parse(f).choices);
+    expect(splitChoices).toEqual(wholeChoices);
+  });
 });
