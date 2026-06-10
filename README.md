@@ -49,6 +49,13 @@ npm install && npm run dev   # tests: npm test
 - `POST/GET/PATCH/DELETE /api/config`, `POST /api/config/rotate` — config management
   (create returns the gateway key once; only its SHA-256 hash is stored).
 - `POST /api/validate-key` — live provider key check.
+- `POST/GET/DELETE /api/config/subkeys` — team sub-key management (Bearer parent key only;
+  `gw_sub_` keys return 403 on management routes). Sub-keys (`gw_sub_…`) route through the
+  parent's providers and fallback chain but carry their own optional rpm/tpm overrides and their
+  own rate-limit buckets — usage counters, circuit-breaker state, and the response cache are
+  shared at the parent level, so sub-key traffic counts against the same provider health and cache
+  as direct use of the parent key. Sub-keys can be individually revoked (DELETE with the 8-char
+  `id` prefix) without affecting the parent or other sub-keys. Maximum 20 sub-keys per config.
 
 ## Providers
 
