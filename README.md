@@ -26,6 +26,9 @@ npm install && npm run dev   # tests: npm test
   model `"provider/model"` or `"auto"` (walks the fallback chain on 429/5xx/timeout).
   Response headers: `x-gateway-provider`, `x-gateway-fallback-count`, `x-gateway-latency-ms`.
 - `GET /v1/models` — union of models from configured providers.
+- `POST /v1/embeddings` — proxy embeddings to any non-Anthropic provider. Requires explicit
+  `provider/model` (e.g. `openai/text-embedding-3-small`); no `"auto"`. Response passes through
+  with `x-gateway-provider` header.
 - `POST/GET/PATCH/DELETE /api/config`, `POST /api/config/rotate` — config management
   (create returns the gateway key once; only its SHA-256 hash is stored).
 - `POST /api/validate-key` — live provider key check.
