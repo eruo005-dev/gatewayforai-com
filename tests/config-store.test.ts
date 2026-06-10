@@ -76,4 +76,21 @@ describe("config-store", () => {
   it("rotateKey returns null for unknown key", async () => {
     expect(await rotateKey("gw_live_nope")).toBeNull();
   });
+
+  it("getConfig throws /corrupt/ when stored ciphertext is corrupted", async () => {
+    await createConfig("gw_live_test1", INPUT);
+    // Find the stored key in FakeRedis, parse the JSON, corrupt one provider's ciphertext.
+    const [storeKey] = [...redis.store.keys()];
+    const stored = JSON.parse(redis.store.get(storeKey) as string);
+    stored.providers.openai = "AAAA";
+    redis.store.set(storeKey, JSON.stringify(stored));
+    await expect(getConfig("gw_live_test1")).rejects.toThrow(/corrupt/);
+  });
+
+  it("updateConfig with rateLimit: {} as never leaves rpm unchanged", async () => {
+    await createConfig("gw_live_test1", INPUT);
+    await updateConfig("gw_live_test1", { rateLimit: {} as never });
+    const cfg = await getConfig("gw_live_test1");
+    expect(cfg?.rateLimit.rpm).toBe(60);
+  });
 });

@@ -2,6 +2,15 @@ import { Redis } from "@upstash/redis";
 import { decrypt, encrypt, generateGatewayKey, sha256 } from "./crypto";
 import type { ChainEntry, ConfigPatch, GatewayConfig, ProviderId } from "./types";
 
+/** Wraps decrypt so crypto details never reach HTTP callers. */
+function safeDecrypt(ct: string): string {
+  try {
+    return decrypt(ct);
+  } catch {
+    throw new Error("config record corrupt");
+  }
+}
+
 let _redis: Redis | null = null;
 
 export function redis(): Redis {
@@ -52,7 +61,7 @@ export async function getConfig(gatewayKey: string): Promise<GatewayConfig | nul
   return {
     ...stored,
     providers: Object.fromEntries(
-      Object.entries(stored.providers).map(([p, ct]) => [p, decrypt(ct as string)]),
+      Object.entries(stored.providers).map(([p, ct]) => [p, safeDecrypt(ct as string)]),
     ),
   };
 }
@@ -66,8 +75,8 @@ export async function updateConfig(gatewayKey: string, patch: ConfigPatch): Prom
       else if (typeof v === "string") stored.providers[p as ProviderId] = encrypt(v);
     }
   }
-  if (patch.fallbackChain) stored.fallbackChain = patch.fallbackChain;
-  if (patch.rateLimit) stored.rateLimit = patch.rateLimit;
+  if (Array.isArray(patch.fallbackChain)) stored.fallbackChain = patch.fallbackChain;
+  if (typeof patch.rateLimit?.rpm === "number") stored.rateLimit = patch.rateLimit;
   await saveStored(gatewayKey, stored);
   return true;
 }
@@ -76,7 +85,14 @@ export async function deleteConfig(gatewayKey: string): Promise<boolean> {
   return (await redis().del(configKey(sha256(gatewayKey)))) > 0;
 }
 
-/** Moves the stored record to a fresh gateway key. Returns the new key, or null if unknown. */
+/**
+ * Moves the stored record to a fresh gateway key. Returns the new key, or null if unknown.
+ *
+ * NOTE: non-atomic — this is two separate operations (write new record, delete old).
+ * A crash between them leaves an unreachable duplicate record under the old key.
+ * There is no correctness impact (the old key is already discarded by the caller),
+ * but it does constitute a storage leak until manual cleanup.
+ */
 export async function rotateKey(oldKey: string): Promise<string | null> {
   const stored = await loadStored(oldKey);
   if (!stored) return null;
