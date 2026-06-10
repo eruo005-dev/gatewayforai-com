@@ -6,7 +6,7 @@ import { sha256 } from "@/lib/crypto";
 import { errJson } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { estimateCostUsd } from "@/lib/pricing";
-import { checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
+import { checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
 import { recordUsage } from "@/lib/usage";
 
 export const runtime = "nodejs";
@@ -45,6 +45,19 @@ export async function POST(req: Request) {
     );
   }
 
+  if (config.rateLimit.tpm) {
+    const tl = await checkTokenLimit(keyHash, config.rateLimit.tpm);
+    if (!tl.success) {
+      return errJson(
+        429,
+        "token_limit_exceeded",
+        `Token limit of ${config.rateLimit.tpm} tokens/min exceeded.`,
+        undefined,
+        { "retry-after": retryAfterSeconds(tl.reset) },
+      );
+    }
+  }
+
   let body: Record<string, any>;
   try {
     body = await req.json();
@@ -68,6 +81,10 @@ export async function POST(req: Request) {
   const cacheTtl = parseCacheTtl(req);
   const cacheable = cacheTtl !== null && !body.stream;
 
+  // Conservative token estimate for paths where we can't read the response body
+  // (streaming + pass-through). Approximates input tokens as message bytes / 4.
+  const estimatedTokens = Math.ceil(JSON.stringify(body.messages).length / 4);
+
   if (cacheable) {
     const cacheKey = cacheKeyFor(keyHash, body);
     const cached = await getCached(cacheKey);
@@ -79,6 +96,20 @@ export async function POST(req: Request) {
           error: false,
         }).catch(() => {}),
       );
+      // Record token usage from cached body (parsed usage.total_tokens)
+      if (config.rateLimit.tpm) {
+        try {
+          const parsed = JSON.parse(cached.body);
+          const total = parsed?.usage?.total_tokens;
+          if (typeof total === "number" && total > 0) {
+            after(() => recordTokens(keyHash, total).catch(() => {}));
+          } else {
+            after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+          }
+        } catch {
+          after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+        }
+      }
       return new Response(cached.body, {
         status: 200,
         headers: {
@@ -127,17 +158,35 @@ export async function POST(req: Request) {
           const cost = estimateCostUsd(providerModel, parsed.usage);
           if (cost !== null) headers.set("x-gateway-cost-estimate-usd", String(cost));
         }
+        // Record actual token usage when available
+        if (config.rateLimit.tpm) {
+          const total = parsed?.usage?.total_tokens;
+          after(() =>
+            recordTokens(
+              keyHash,
+              typeof total === "number" && total > 0 ? total : estimatedTokens,
+            ).catch(() => {}),
+          );
+        }
       } catch {
         // ignore parse errors — cost header is best-effort
+        if (config.rateLimit.tpm) {
+          after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+        }
       }
       return new Response(text, { status: result.response.status, headers });
     }
 
     // Non-JSON or error response: pass through without caching
+    // Use conservative estimate since we can't read the body
+    if (config.rateLimit.tpm) {
+      after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+    }
     return new Response(result.response.body, { status: result.response.status, headers });
   }
 
   // No caching — original pass-through path (streaming safe)
+  // Use conservative estimate — body is not read here (would break streaming)
   const result = await routeRequest({ body, chain, keys: config.providers, breaker: redisBreaker(keyHash) });
 
   after(() =>
@@ -147,6 +196,11 @@ export async function POST(req: Request) {
       error: !result.response.ok,
     }).catch(() => {}),
   );
+
+  // Conservative token approximation: messages JSON bytes / 4 (documents streaming limitation)
+  if (config.rateLimit.tpm) {
+    after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+  }
 
   const headers = new Headers(result.response.headers);
   headers.set("x-gateway-provider", result.provider);

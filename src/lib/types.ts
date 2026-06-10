@@ -11,7 +11,7 @@ export interface ChainEntry {
 export interface GatewayConfig {
   providers: Partial<Record<ProviderId, string>>;
   fallbackChain: ChainEntry[];
-  rateLimit: { rpm: number };
+  rateLimit: { rpm: number; tpm?: number };
   createdAt: string;
 }
 
@@ -19,5 +19,5 @@ export interface ConfigPatch {
   /** string = set/replace key (plaintext in), null = remove provider */
   providers?: Partial<Record<ProviderId, string | null>>;
   fallbackChain?: ChainEntry[];
-  rateLimit?: { rpm: number };
+  rateLimit?: { rpm: number; tpm?: number };
 }

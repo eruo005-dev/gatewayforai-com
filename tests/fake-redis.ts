@@ -13,6 +13,12 @@ export class FakeRedis {
     return v;
   }
 
+  async incrby(k: string, n: number) {
+    const v = Number(this.store.get(k) ?? 0) + n;
+    this.store.set(k, v);
+    return v;
+  }
+
   async hincrby(k: string, field: string, by: number) {
     const h = this.hashes.get(k) ?? new Map();
     h.set(field, (h.get(field) ?? 0) + by);

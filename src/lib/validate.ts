@@ -39,5 +39,12 @@ export function validateConfigInput(input: unknown): ValidationResult {
     return { error: "rateLimit.rpm must be an integer between 1 and 1000." };
   }
 
-  return { value: { providers, fallbackChain, rateLimit: { rpm } } };
+  const tpm = o.rateLimit?.tpm;
+  if (tpm !== undefined && tpm !== null) {
+    if (!Number.isInteger(tpm) || tpm < 1000 || tpm > 10_000_000) {
+      return { error: "rateLimit.tpm must be an integer between 1000 and 10000000." };
+    }
+  }
+
+  return { value: { providers, fallbackChain, rateLimit: { rpm, ...(tpm && { tpm }) } } };
 }

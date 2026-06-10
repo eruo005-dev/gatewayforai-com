@@ -21,6 +21,7 @@ export default function Start() {
   const [valid, setValid] = useState<Record<string, Validity>>({});
   const [chain, setChain] = useState<Array<{ provider: string; model: string }>>([]);
   const [rpm, setRpm] = useState(60);
+  const [tpm, setTpm] = useState(0); // 0 = off
   const [gatewayKey, setGatewayKey] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -76,7 +77,7 @@ export default function Start() {
       const res = await fetch("/api/config", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ providers, fallbackChain: chain, rateLimit: { rpm } }),
+        body: JSON.stringify({ providers, fallbackChain: chain, rateLimit: { rpm, ...(tpm > 0 && { tpm }) } }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error?.message ?? "Something went wrong.");
@@ -202,6 +203,17 @@ res = client.chat.completions.create(
             {[10, 30, 60, 120, 300, 600, 1000].map((n) => (
               <option key={n} value={n}>{n} requests / min</option>
             ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="tpm">TPM (tokens/min)</label>
+          <select id="tpm" value={tpm} onChange={(e) => setTpm(Number(e.target.value))}>
+            <option value={0}>Off (no token limit)</option>
+            <option value={10_000}>10k tokens / min</option>
+            <option value={50_000}>50k tokens / min</option>
+            <option value={100_000}>100k tokens / min</option>
+            <option value={500_000}>500k tokens / min</option>
+            <option value={1_000_000}>1M tokens / min</option>
           </select>
         </div>
       </div>

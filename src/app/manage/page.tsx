@@ -6,7 +6,7 @@ import { useState } from "react";
 interface ConfigView {
   providers: Record<string, string>;
   fallbackChain: Array<{ provider: string; model: string }>;
-  rateLimit: { rpm: number };
+  rateLimit: { rpm: number; tpm?: number };
   createdAt: string;
   usage: Array<Record<string, number | string>>;
 }
@@ -42,9 +42,10 @@ export default function Manage() {
   async function save() {
     setBusy(true); setError(""); setNotice("");
     try {
+      const { rpm, tpm } = cfg!.rateLimit;
       await call("PATCH", "/api/config", {
         fallbackChain: cfg!.fallbackChain,
-        rateLimit: cfg!.rateLimit,
+        rateLimit: { rpm, ...(tpm && tpm > 0 ? { tpm } : {}) },
       });
       setNotice("Saved.");
     } catch (e) { setError((e as Error).message); }
@@ -150,11 +151,35 @@ export default function Manage() {
               <select
                 id="manage-rpm"
                 value={cfg.rateLimit.rpm}
-                onChange={(e) => setCfg((c) => c && { ...c, rateLimit: { rpm: Number(e.target.value) } })}
+                onChange={(e) =>
+                  setCfg((c) => c && { ...c, rateLimit: { ...c.rateLimit, rpm: Number(e.target.value) } })
+                }
               >
                 {[10, 30, 60, 120, 300, 600, 1000].map((n) => (
                   <option key={n} value={n}>{n} requests / min</option>
                 ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="manage-tpm">TPM (tokens/min)</label>
+              <select
+                id="manage-tpm"
+                value={cfg.rateLimit.tpm ?? 0}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setCfg((c) => {
+                    if (!c) return c;
+                    const { tpm: _removed, ...rest } = c.rateLimit;
+                    return { ...c, rateLimit: val > 0 ? { ...rest, tpm: val } : rest };
+                  });
+                }}
+              >
+                <option value={0}>Off (no token limit)</option>
+                <option value={10_000}>10k tokens / min</option>
+                <option value={50_000}>50k tokens / min</option>
+                <option value={100_000}>100k tokens / min</option>
+                <option value={500_000}>500k tokens / min</option>
+                <option value={1_000_000}>1M tokens / min</option>
               </select>
             </div>
             <button className="btn primary" onClick={save} disabled={busy}>Save changes</button>
