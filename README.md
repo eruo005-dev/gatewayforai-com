@@ -25,6 +25,12 @@ npm install && npm run dev   # tests: npm test
 - `POST /v1/chat/completions` — OpenAI-compatible, `Authorization: Bearer gw_live_...`,
   model `"provider/model"` or `"auto"` (walks the fallback chain on 429/5xx/timeout).
   Response headers: `x-gateway-provider`, `x-gateway-fallback-count`, `x-gateway-latency-ms`.
+  - **Cache (opt-in):** set request header `x-gateway-cache: <ttl_seconds>` (1–86400) on
+    non-streaming requests. Cache hit returns `x-gateway-cache: hit`; miss returns
+    `x-gateway-cache: miss` and stores the response for subsequent identical calls.
+  - **Cost estimate:** `x-gateway-cost-estimate-usd` header is set on cache-miss (non-streaming)
+    responses when the model is in the pricing table. Streaming responses do not carry usage data
+    and therefore do not include a cost estimate.
 - `GET /v1/models` — union of models from configured providers.
 - `POST /v1/embeddings` — proxy embeddings to any non-Anthropic provider. Requires explicit
   `provider/model` (e.g. `openai/text-embedding-3-small`); no `"auto"`. Response passes through

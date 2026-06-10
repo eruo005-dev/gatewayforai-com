@@ -5,6 +5,7 @@ import { getConfig } from "@/lib/config-store";
 import { sha256 } from "@/lib/crypto";
 import { errJson } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
+import { estimateCostUsd } from "@/lib/pricing";
 import { checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
 import { recordUsage } from "@/lib/usage";
 
@@ -115,6 +116,20 @@ export async function POST(req: Request) {
       after(() =>
         setCached(cacheKey, { body: text, provider: result.provider }, cacheTtl).catch(() => {}),
       );
+      // Cost estimate — body already read, so we can parse it here
+      try {
+        const parsed = JSON.parse(text);
+        const providerModel =
+          typeof parsed.model === "string"
+            ? `${result.provider}/${parsed.model}`
+            : undefined;
+        if (providerModel) {
+          const cost = estimateCostUsd(providerModel, parsed.usage);
+          if (cost !== null) headers.set("x-gateway-cost-estimate-usd", String(cost));
+        }
+      } catch {
+        // ignore parse errors — cost header is best-effort
+      }
       return new Response(text, { status: result.response.status, headers });
     }
 
