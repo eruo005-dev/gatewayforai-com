@@ -1,0 +1,2 @@
+:root { --bg: #0a0a0b; --text: #e8e8ea; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
