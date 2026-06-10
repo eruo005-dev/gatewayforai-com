@@ -16,6 +16,7 @@ export default function Manage() {
   const [cfg, setCfg] = useState<ConfigView | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [rotatedKey, setRotatedKey] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function call(method: string, path = "/api/config", body?: unknown) {
@@ -56,7 +57,8 @@ export default function Manage() {
     try {
       const { gatewayKey } = await call("POST", "/api/config/rotate");
       setKey(gatewayKey);
-      setNotice(`New key (copy it now — shown once): ${gatewayKey}`);
+      setRotatedKey(gatewayKey);
+      setNotice("New key generated — copy it now, it is shown once.");
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
@@ -99,6 +101,12 @@ export default function Manage() {
       </div>
 
       {notice && <p style={{ color: "var(--accent)", fontFamily: "var(--mono)", fontSize: 13 }}>{notice}</p>}
+      {rotatedKey && (
+        <div>
+          <div className="keybox">{rotatedKey}</div>
+          <button className="btn" onClick={() => navigator.clipboard.writeText(rotatedKey)}>Copy key</button>
+        </div>
+      )}
       {error && <p className="error-text">{error}</p>}
 
       {cfg && (
@@ -108,8 +116,8 @@ export default function Manage() {
             <p className="hint">Keys are masked. To change a key, delete and re-create the config (or PATCH via API).</p>
             {Object.entries(cfg.providers).map(([p, masked]) => (
               <div className="field" key={p}>
-                <label>{p}</label>
-                <input value={masked} disabled />
+                <label htmlFor={`masked-${p}`}>{p}</label>
+                <input id={`masked-${p}`} value={masked} disabled />
               </div>
             ))}
           </div>
@@ -121,6 +129,7 @@ export default function Manage() {
                 <span className="order">{i + 1}</span>
                 <span>{e.provider}/</span>
                 <input
+                  aria-label={`${e.provider} model`}
                   value={e.model}
                   onChange={(ev) =>
                     setCfg((c) => c && {
@@ -131,14 +140,15 @@ export default function Manage() {
                   }
                 />
                 <span className="arrows">
-                  <button onClick={() => move(i, -1)}>↑</button>
-                  <button onClick={() => move(i, 1)}>↓</button>
+                  <button onClick={() => move(i, -1)} aria-label="Move up">↑</button>
+                  <button onClick={() => move(i, 1)} aria-label="Move down">↓</button>
                 </span>
               </div>
             ))}
             <div className="field" style={{ marginTop: 14 }}>
-              <label>RPM</label>
+              <label htmlFor="manage-rpm">RPM</label>
               <select
+                id="manage-rpm"
                 value={cfg.rateLimit.rpm}
                 onChange={(e) => setCfg((c) => c && { ...c, rateLimit: { rpm: Number(e.target.value) } })}
               >

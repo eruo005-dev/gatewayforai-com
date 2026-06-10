@@ -30,12 +30,13 @@ code, pre, .mono { font-family: var(--mono); }
 /* nav */
 .nav {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 20px 0; border-bottom: 1px solid var(--line);
+  padding: 20px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap;
 }
 .nav .logo { font-family: var(--mono); font-weight: 700; font-size: 18px; }
 .nav .logo span { color: var(--accent); }
 .nav .links { display: flex; gap: 28px; font-size: 14px; color: var(--muted); }
 .nav .links a:hover { color: var(--text); }
+@media (max-width: 600px) { .nav .links { gap: 14px; font-size: 13px; flex-wrap: wrap; } }
 
 /* hero */
 .hero { padding: 88px 0 40px; text-align: center; }

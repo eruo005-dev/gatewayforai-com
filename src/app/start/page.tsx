@@ -152,8 +152,9 @@ res = client.chat.completions.create(
         <p className="hint">Paste any subset. Keys validate live against the provider.</p>
         {PROVIDERS.map((p) => (
           <div className="field" key={p.id}>
-            <label>{p.label}</label>
+            <label htmlFor={`key-${p.id}`}>{p.label}</label>
             <input
+              id={`key-${p.id}`}
               type="password"
               placeholder={`${p.label} API key (optional)`}
               value={keys[p.id] ?? ""}
@@ -178,6 +179,7 @@ res = client.chat.completions.create(
             <span className="order">{i + 1}</span>
             <span>{e.provider}/</span>
             <input
+              aria-label={`${e.provider} model`}
               value={e.model}
               onChange={(ev) =>
                 setChain((c) => c.map((x, j) => (j === i ? { ...x, model: ev.target.value } : x)))
@@ -195,8 +197,8 @@ res = client.chat.completions.create(
         <h3>3 · Rate limit</h3>
         <p className="hint">Requests per minute allowed through your gateway key.</p>
         <div className="field">
-          <label>RPM</label>
-          <select value={rpm} onChange={(e) => setRpm(Number(e.target.value))}>
+          <label htmlFor="rpm">RPM</label>
+          <select id="rpm" value={rpm} onChange={(e) => setRpm(Number(e.target.value))}>
             {[10, 30, 60, 120, 300, 600, 1000].map((n) => (
               <option key={n} value={n}>{n} requests / min</option>
             ))}
