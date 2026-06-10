@@ -42,8 +42,9 @@ export async function getUsage(keyHash: string, days: string[]): Promise<UsageDa
   const r = redis();
   return Promise.all(
     days.map(async (date) => {
-      const h = (await r.hgetall<Record<string, number>>(`usage:${keyHash}:${date}`)) ?? {};
-      return { requests: 0, errors: 0, fallbacks: 0, ...h, date };
+      const h = (await r.hgetall<Record<string, unknown>>(`usage:${keyHash}:${date}`)) ?? {};
+      const nums = Object.fromEntries(Object.entries(h).map(([k, v]) => [k, Number(v)]));
+      return { requests: 0, errors: 0, fallbacks: 0, ...nums, date };
     }),
   );
 }
