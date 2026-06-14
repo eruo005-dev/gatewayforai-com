@@ -1,4 +1,11 @@
-/** USD per million tokens: { in: input price, out: output price } */
+/**
+ * USD per million tokens: { in: input price, out: output price }
+ *
+ * NOTE: These prices are best-effort estimates captured from provider pricing
+ * pages and may drift as providers change their rates. They are used only for
+ * the optional `x-gateway-cost-estimate-usd` header and `cheapest` routing —
+ * never for billing. PRs welcome to keep them current.
+ */
 export const PRICES: Record<string, { in: number; out: number }> = {
   "openai/gpt-4o": { in: 2.5, out: 10 },
   "openai/gpt-4o-mini": { in: 0.15, out: 0.6 },
@@ -12,6 +19,10 @@ export const PRICES: Record<string, { in: number; out: number }> = {
   "mistral/mistral-large-latest": { in: 2, out: 6 },
   "deepseek/deepseek-chat": { in: 0.27, out: 1.1 },
   "deepseek/deepseek-reasoner": { in: 0.55, out: 2.19 },
+  // Current DeepSeek aliases the live /v1/models endpoint returns. Estimated at
+  // the deepseek-chat rate; update if DeepSeek publishes distinct pricing.
+  "deepseek/deepseek-v4": { in: 0.27, out: 1.1 },
+  "deepseek/deepseek-v4-flash": { in: 0.27, out: 1.1 },
   "together/meta-llama/Llama-3.3-70B-Instruct-Turbo": { in: 0.88, out: 0.88 },
 };
 
