@@ -19,9 +19,11 @@ const FAQ = [
   ["What does it cost?", "The gateway is free. You pay your providers directly with your own keys — we never touch your billing."],
   ["I lost my gateway key.", "Keys cannot be recovered (we only store a hash). Create a new config at /start — it takes 30 seconds."],
   ["What happens if someone steals my gateway key?", "They can make requests through your configured providers (spending your provider credits) until you act — they can never read your raw provider keys, which are encrypted and never returned by any endpoint. Rotate or delete the config at /manage the moment you suspect a leak."],
-  ["Will it stay free?", "The gateway is free during beta. If that changes, existing gateways will keep working and you'll see pricing on this page well in advance — your provider keys and traffic stay yours either way."],
+  ["Will it stay free?", "The gateway is open source (MIT) and the hosted instance is free. BYOK keeps our operating costs near zero, so there is nothing to bill. Self-host it and it is free in every sense."],
   ["Does fallback work mid-stream?", "Fallback triggers on errors and timeouts before the first token — a provider that accepts the request but never produces output (a stream that dies at birth) fails over to the next provider automatically. Once output starts, the stream is committed and passes through; a connection that dies mid-stream is not retried (yet)."],
   ["Who runs this — and why is it free?", "GatewayforAI is built and operated by an independent developer — no VC, no acquisition exit to worry about. It stays free during beta because BYOK keeps our costs near zero: you bring the provider keys, we only route requests. The entire codebase is open source on GitHub, and /api/health is public if you want to wire up your own uptime monitoring."],
+  ["Is it really free?", "Yes. The gateway is open source (MIT) and the hosted instance is free — you bring your own provider keys (BYOK), so there's nothing for us to bill. Self-host it and it's free in every sense: your infrastructure, your keys, your data."],
+  ["Can I self-host it?", "Absolutely — that's the point. One-click deploy to Vercel plus a free Upstash Redis database and you have your own private gateway. The hosted instance runs the exact same open-source code. See the README on GitHub for the deploy button and setup."],
 ] as const;
 
 export default function Home() {
@@ -35,6 +37,7 @@ export default function Home() {
             <a href="#features">Features</a>
             <a href="#how">How it works</a>
             <a href="#faq">FAQ</a>
+            <a href="https://github.com/eruo005-dev/gatewayforai-com" target="_blank" rel="noopener noreferrer">GitHub</a>
             <Link href="/manage">Manage</Link>
             <Link href="/start" style={{ color: "var(--accent)" }}>Get started →</Link>
           </div>
@@ -44,6 +47,14 @@ export default function Home() {
       <main id="main">
       <div className="container">
         <section className="hero">
+          <a
+            href="https://github.com/eruo005-dev/gatewayforai-com"
+            className="oss-badge"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            ★ Free &amp; open source · MIT licensed
+          </a>
           <h1>One endpoint.<br />Eight providers.<br /><em>Failover built in.</em></h1>
           <p className="sub">
             An OpenAI-compatible LLM gateway with automatic fallback routing and
@@ -52,6 +63,12 @@ export default function Home() {
           <div className="cta-row">
             <Link href="/start" className="btn primary">Create your gateway — 30s</Link>
             <a href="#how" className="btn">See how it works</a>
+            <a
+              href="https://github.com/eruo005-dev/gatewayforai-com"
+              className="btn"
+              target="_blank"
+              rel="noopener noreferrer"
+            >Star on GitHub →</a>
           </div>
           <RouteDiagram />
         </section>
@@ -92,6 +109,45 @@ export default function Home() {
             {["OpenAI", "Anthropic", "Google Gemini", "Groq", "Mistral", "Together", "DeepSeek", "OpenRouter"].map((p) => (
               <span key={p}>{p}</span>
             ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="section" id="opensource">
+        <div className="container">
+          <span className="kicker">open source</span>
+          <h2>Free forever, yours to run</h2>
+          <p className="lead">The code is public, the hosted instance is free, and you can run your own. Pick whichever works for you.</p>
+          <div className="grid">
+            <div className="card">
+              <span className="ico">[MIT]</span>
+              <h3>MIT licensed</h3>
+              <p>Use it, fork it, host it, build a business on it. No strings.</p>
+            </div>
+            <div className="card">
+              <span className="ico">[^v]</span>
+              <h3>Self-host in one click</h3>
+              <p>Deploy your own instance to Vercel with the button in the README. Bring your own Upstash Redis (free tier). Your keys, your infra.</p>
+            </div>
+            <div className="card">
+              <span className="ico">[**]</span>
+              <h3>Or use the free hosted instance</h3>
+              <p>No signup, BYOK, nothing to pay us. The public instance is the same code you see on GitHub.</p>
+            </div>
+          </div>
+          <div className="cta-row" style={{ marginTop: 40 }}>
+            <a
+              href="https://github.com/eruo005-dev/gatewayforai-com"
+              className="btn primary"
+              target="_blank"
+              rel="noopener noreferrer"
+            >View source on GitHub →</a>
+            <a
+              href="https://github.com/eruo005-dev/gatewayforai-com#readme"
+              className="btn"
+              target="_blank"
+              rel="noopener noreferrer"
+            >Read the docs →</a>
           </div>
         </div>
       </section>
@@ -148,7 +204,7 @@ export default function Home() {
         <div className="container">
           <span className="mono">gateway<span style={{ color: "var(--accent)" }}>for</span>ai © 2026</span>
           <span>
-            <Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link> · <a href="https://github.com/eruo005-dev/gatewayforai-com">GitHub</a> · <Link href="/api/health">Status</Link> · <Link href="/start">Get started</Link> · <Link href="/manage">Manage</Link>
+            <Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link> · <a href="https://github.com/eruo005-dev/gatewayforai-com" target="_blank" rel="noopener noreferrer">GitHub</a> · <a href="https://github.com/eruo005-dev/gatewayforai-com/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a> · <Link href="/api/health">Status</Link> · <Link href="/start">Get started</Link> · <Link href="/manage">Manage</Link>
           </span>
         </div>
       </footer>

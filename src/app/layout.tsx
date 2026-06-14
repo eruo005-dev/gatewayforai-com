@@ -8,12 +8,12 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 export const metadata: Metadata = {
   title: "GatewayforAI — One endpoint. Eight providers. Failover built in.",
   description:
-    "OpenAI-compatible LLM gateway with automatic fallback routing and rate limiting. Bring your own keys. No signup.",
+    "OpenAI-compatible LLM gateway with automatic fallback routing and rate limiting. Bring your own keys. No signup. Open source, MIT licensed.",
   metadataBase: new URL("https://gatewayforai.com"),
   openGraph: {
     title: "GatewayforAI — One endpoint. Eight providers. Failover built in.",
     description:
-      "OpenAI-compatible LLM gateway with automatic fallback routing and rate limiting. Bring your own keys. No signup.",
+      "OpenAI-compatible LLM gateway with automatic fallback routing and rate limiting. Bring your own keys. No signup. Open source, MIT licensed.",
     url: "https://gatewayforai.com",
     siteName: "GatewayforAI",
     type: "website",
