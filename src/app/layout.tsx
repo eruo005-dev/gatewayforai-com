@@ -10,6 +10,7 @@ export const metadata: Metadata = {
   description:
     "OpenAI-compatible LLM gateway with automatic fallback routing and rate limiting. Bring your own keys. No signup. Open source, MIT licensed.",
   metadataBase: new URL("https://gatewayforai.com"),
+  alternates: { canonical: "/" },
   openGraph: {
     title: "GatewayforAI — One endpoint. Eight providers. Failover built in.",
     description:
@@ -19,7 +20,7 @@ export const metadata: Metadata = {
     type: "website",
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "GatewayforAI — One endpoint. Eight providers. Failover built in.",
     description:
       "OpenAI-compatible LLM gateway with automatic fallback routing and rate limiting. BYOK. No signup.",

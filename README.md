@@ -4,9 +4,11 @@
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/eruo005-dev/gatewayforai-com/actions/workflows/ci.yml/badge.svg)](https://github.com/eruo005-dev/gatewayforai-com/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-187%20passing-brightgreen.svg)](#development)
+[![tests](https://img.shields.io/badge/tests-208%20passing-brightgreen.svg)](#development)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Made with Next.js](https://img.shields.io/badge/made%20with-Next.js-black.svg)](https://nextjs.org)
+
+> 🇹🇷 Türkçe README: [yapaygecit](https://github.com/eruo005-dev/yapaygecit)
 
 GatewayforAI is a single OpenAI- **and** Anthropic-compatible endpoint that sits in
 front of eight LLM providers. Point your existing SDK at it, send `"auto"` as the
@@ -37,7 +39,7 @@ import OpenAI from "openai";
 
 const openai = new OpenAI({
   apiKey: "gw_live_...",                                                  // your gateway key
-  baseURL: "https://gatewayforai-pq8sxjetz-support-6002s-projects.vercel.app/v1",
+  baseURL: "https://gatewayforai.com/v1",
 });
 
 const res = await openai.chat.completions.create({
@@ -46,14 +48,11 @@ const res = await openai.chat.completions.create({
 });
 ```
 
-> The custom domain **gatewayforai.com** is pending DNS; use the Vercel URL above in the
-> meantime.
-
-Create a config (and get your `gw_live_…` key) from the [`/start`](https://gatewayforai-pq8sxjetz-support-6002s-projects.vercel.app/start)
+Create a config (and get your `gw_live_…` key) from the [`/start`](https://gatewayforai.com/start)
 page, or via curl:
 
 ```bash
-curl -X POST https://gatewayforai-pq8sxjetz-support-6002s-projects.vercel.app/api/config \
+curl -X POST https://gatewayforai.com/api/config \
   -H "content-type: application/json" \
   -d '{"providers":{"openai":"sk-...","anthropic":"sk-ant-..."}}'
 # → returns your gw_live_... key ONCE. Store it; only its SHA-256 hash is kept.
@@ -167,6 +166,7 @@ See the [API reference](#api-reference) for every endpoint and header.
 - `POST/GET/PATCH/DELETE /api/config`, `POST /api/config/rotate` — config management
   (create returns the gateway key once; only its SHA-256 hash is stored).
 - `POST /api/validate-key` — live provider key check.
+- `GET /api/health` — public health probe; returns `{"status":"ok"}` with 200 when the service is up. Use for uptime monitoring.
 - `POST/GET/DELETE /api/config/subkeys` — team sub-key management (Bearer parent key only;
   `gw_sub_` keys return 403 on management routes). Sub-keys (`gw_sub_…`) route through the
   parent's providers and fallback chain but carry their own optional rpm/tpm overrides and their
