@@ -255,7 +255,15 @@ export async function updateConfig(gatewayKey: string, patch: ConfigPatch): Prom
     }
   }
   if (Array.isArray(patch.fallbackChain)) stored.fallbackChain = patch.fallbackChain;
-  if (typeof patch.rateLimit?.rpm === "number") stored.rateLimit = patch.rateLimit;
+  if (typeof patch.rateLimit?.rpm === "number") {
+    // Store ONLY the validated shape — never the raw patch object — so a caller
+    // can't stuff junk/unknown keys (e.g. constructor, arbitrary fields) into the
+    // persisted rateLimit record (data-hygiene; LOW finding from red-team R2).
+    stored.rateLimit = {
+      rpm: patch.rateLimit.rpm,
+      ...(typeof patch.rateLimit.tpm === "number" ? { tpm: patch.rateLimit.tpm } : {}),
+    };
+  }
   await saveStored(gatewayKey, stored);
   return true;
 }
