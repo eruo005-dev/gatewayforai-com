@@ -169,6 +169,28 @@ function refreshConfigTtl(hash: string): void {
   void Promise.resolve(redis().expire(configKey(hash), CONFIG_TTL_SECONDS)).catch(() => {});
 }
 
+/**
+ * Loads a config record AND refreshes its idle-expiry TTL in a SINGLE pipelined
+ * round-trip (GET + EXPIRE), instead of a GET followed by a separate fire-and-forget
+ * EXPIRE. The EXPIRE on a missing key is a harmless Redis no-op, so pipelining is
+ * safe even when the record is absent — the GET result is what decides auth.
+ *
+ * Used on the parent-key auth path where the two ops are independent of each
+ * other (the refresh doesn't depend on the GET's value, only on the key). The
+ * sub-key path is left sequential because its two GETs are data-dependent
+ * (sub-key record → parentHash → parent record).
+ */
+async function loadStoredRefreshing(hash: string): Promise<StoredConfig | null> {
+  const key = configKey(hash);
+  const [raw] = (await redis()
+    .pipeline()
+    .get<string | StoredConfig>(key)
+    .expire(key, CONFIG_TTL_SECONDS)
+    .exec()) as [string | StoredConfig | null, number];
+  if (!raw) return null;
+  return typeof raw === "string" ? (JSON.parse(raw) as StoredConfig) : raw;
+}
+
 interface SubKeyRecord {
   parentHash: string;
   label: string;
@@ -284,21 +306,33 @@ export async function deleteConfig(gatewayKey: string): Promise<boolean> {
   return deleted;
 }
 
+// Lua: atomic rotate. GET the old record; if it's missing return nil (caller maps
+// to "unknown key"). Otherwise SET it under the new key WITH the config TTL and DEL
+// the old key — all in ONE round-trip, so a crash can never leave BOTH keys (a
+// storage leak) or NEITHER (data loss). Returns the record string, or false on miss.
+//   KEYS[1] = old config key, KEYS[2] = new config key
+//   ARGV[1] = TTL seconds
+const ROTATE_LUA =
+  "local v = redis.call('GET', KEYS[1]); if not v then return false end; " +
+  "redis.call('SET', KEYS[2], v, 'EX', ARGV[1]); redis.call('DEL', KEYS[1]); return v";
+
 /**
  * Moves the stored record to a fresh gateway key. Returns the new key, or null if unknown.
  *
- * NOTE: non-atomic — this is two separate operations (write new record, delete old).
- * A crash between them leaves an unreachable duplicate record under the old key.
- * There is no correctness impact (the old key is already discarded by the caller),
- * but it does constitute a storage leak until manual cleanup.
+ * ATOMIC: the GET-old → SET-new(with TTL) → DEL-old runs as ONE Lua `eval`, so a
+ * crash mid-rotate can never leave a duplicate record under the old key (storage
+ * leak) nor drop the record entirely. The new record carries the standard config
+ * TTL, identical to a normal write (saveStored).
  */
 export async function rotateKey(oldKey: string): Promise<string | null> {
-  const stored = await loadStored(oldKey);
-  if (!stored) return null;
   const newKey = generateGatewayKey();
-  await saveStored(newKey, stored);
-  await redis().del(configKey(sha256(oldKey)));
-  return newKey;
+  const res = await redis().eval(
+    ROTATE_LUA,
+    [configKey(sha256(oldKey)), configKey(sha256(newKey))],
+    [CONFIG_TTL_SECONDS],
+  );
+  // `false`/null ⇒ the old key didn't exist ⇒ unknown key.
+  return res ? newKey : null;
 }
 
 // ─── Sub-key management ──────────────────────────────────────────────────────
@@ -472,13 +506,13 @@ export async function resolveGatewayAuth(key: string): Promise<GatewayAuthResult
     };
   }
 
-  // Parent / live key path
+  // Parent / live key path. The GET (load record) and the EXPIRE (idle-expiry
+  // keep-alive) are independent, so we batch them into ONE pipelined round-trip
+  // (loadStoredRefreshing) instead of a GET + a separate fire-and-forget EXPIRE.
+  // Still wrapped in withTimeout so a Redis brownout fails CLOSED (→ null → 401).
   const hash = sha256(key);
-  const stored = await withTimeout(loadStoredByHash(hash), REDIS_TIMEOUT_MS, () => null);
+  const stored = await withTimeout(loadStoredRefreshing(hash), REDIS_TIMEOUT_MS, () => null);
   if (!stored) return null;
-
-  // Keep-alive: an authenticated live request refreshes this config's idle-expiry.
-  refreshConfigTtl(hash);
 
   const config: GatewayConfig = {
     ...stored,

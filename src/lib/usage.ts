@@ -22,18 +22,27 @@ export interface UsageFields {
   fallbacks?: number;
 }
 
+// Lua: HINCRBY every (field, amount) pair packed into ARGV, then EXPIRE the hash —
+// in ONE round-trip. ARGV layout: [ttl, field1, amt1, field2, amt2, ...]. Folding
+// the up-to-4 HINCRBYs + the EXPIRE into a single eval means a crash can never land
+// between the increments and the expire (which would leak the daily hash with no
+// TTL) and saves up to 4 sequential network hops on the hot path.
+const RECORD_USAGE_LUA =
+  "for i = 2, #ARGV, 2 do redis.call('HINCRBY', KEYS[1], ARGV[i], ARGV[i + 1]) end; " +
+  "redis.call('EXPIRE', KEYS[1], ARGV[1]); return 1";
+
 export async function recordUsage(
   keyHash: string,
   fields: UsageFields,
   day: string = today(),
 ): Promise<void> {
   const k = `usage:${keyHash}:${day}`;
-  const r = redis();
-  await r.hincrby(k, "requests", 1);
-  if (fields.error) await r.hincrby(k, "errors", 1);
-  if (fields.fallbacks) await r.hincrby(k, "fallbacks", fields.fallbacks);
-  if (fields.provider) await r.hincrby(k, `provider:${fields.provider}`, 1);
-  await r.expire(k, 90 * DAY_SECONDS);
+  // [ttl, field, amount, ...] — same set of increments as the old sequential path.
+  const argv: (string | number)[] = [90 * DAY_SECONDS, "requests", 1];
+  if (fields.error) argv.push("errors", 1);
+  if (fields.fallbacks) argv.push("fallbacks", fields.fallbacks);
+  if (fields.provider) argv.push(`provider:${fields.provider}`, 1);
+  await redis().eval(RECORD_USAGE_LUA, [k], argv);
 }
 
 export type UsageDay = { date: string; requests: number; errors: number; fallbacks: number } & Record<string, number | string>;

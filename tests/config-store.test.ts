@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { FakeRedis } from "./fake-redis";
 import {
   setRedisForTests, createConfig, getConfig, updateConfig, deleteConfig, rotateKey,
@@ -90,6 +90,28 @@ describe("config-store", () => {
 
   it("rotateKey returns null for unknown key", async () => {
     expect(await rotateKey("gw_live_nope")).toBeNull();
+  });
+
+  it("rotateKey is ATOMIC: one eval, old key gone + new key works in ONE instance", async () => {
+    // Pins the single-round-trip rename. The whole rotate must run through one
+    // redis.eval (GET old → SET new w/ TTL → DEL old). After it, the old record
+    // must be absent and the new one fully functional — all in the SAME FakeRedis.
+    await createConfig("gw_live_atomic_old", INPUT);
+    const evalSpy = vi.spyOn(redis, "eval");
+    const newKey = await rotateKey("gw_live_atomic_old");
+    expect(newKey).toMatch(/^gw_live_/);
+    // Exactly one eval — not a write-then-del pair of separate ops.
+    expect(evalSpy).toHaveBeenCalledTimes(1);
+    const script = evalSpy.mock.calls[0][0] as string;
+    expect(script).toContain("GET");
+    expect(script).toContain("SET");
+    expect(script).toContain("DEL");
+    // Old key gone; new key resolves with intact, decrypted data.
+    expect(redis.store.has(`config:${sha256("gw_live_atomic_old")}`)).toBe(false);
+    expect(await getConfig("gw_live_atomic_old")).toBeNull();
+    expect((await getConfig(newKey!))?.providers.openai).toBe("sk-openai-123");
+    // New record carries the standard config TTL (same as a normal write).
+    expect(redis.ttls.get(`config:${sha256(newKey!)}`)).toBe(CONFIG_TTL_SECONDS);
   });
 
   it("rotateKey deletes the old key in the SAME redis instance (CRITICAL 6)", async () => {
