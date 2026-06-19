@@ -4,23 +4,11 @@ import {
 import { clientIp } from "@/lib/client-ip";
 import { generateGatewayKey, maskKey, sha256 } from "@/lib/crypto";
 import { errJson } from "@/lib/errors";
-import { checkIpLimit, retryAfterSeconds } from "@/lib/ratelimit";
+import { bearerKey, ipGate } from "@/lib/http";
 import { getUsage, lastDays } from "@/lib/usage";
 import { validateConfigInput } from "@/lib/validate";
 
 export const runtime = "nodejs";
-
-async function ipGate(req: Request): Promise<Response | null> {
-  const rl = await checkIpLimit(clientIp(req));
-  if (rl.success) return null;
-  return errJson(429, "rate_limit_exceeded", "Too many requests. Try again shortly.", undefined, {
-    "retry-after": retryAfterSeconds(rl.reset),
-  });
-}
-
-function bearerKey(req: Request): string {
-  return (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-}
 
 /** Create a config. Returns the gateway key — shown exactly once, never stored. */
 export async function POST(req: Request) {

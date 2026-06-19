@@ -4,24 +4,10 @@ import {
   revokeSubKey,
   resolveGatewayAuth,
 } from "@/lib/config-store";
-import { clientIp } from "@/lib/client-ip";
-import { sha256 } from "@/lib/crypto";
 import { errJson } from "@/lib/errors";
-import { checkIpLimit, retryAfterSeconds } from "@/lib/ratelimit";
+import { bearerKey, ipGate } from "@/lib/http";
 
 export const runtime = "nodejs";
-
-async function ipGate(req: Request): Promise<Response | null> {
-  const rl = await checkIpLimit(clientIp(req));
-  if (rl.success) return null;
-  return errJson(429, "rate_limit_exceeded", "Too many requests. Try again shortly.", undefined, {
-    "retry-after": retryAfterSeconds(rl.reset),
-  });
-}
-
-function bearerKey(req: Request): string {
-  return (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-}
 
 /** Validate label and optional rpm/tpm using the same ranges as validate.ts */
 function validateSubKeyInput(body: Record<string, any>): string | null {

@@ -2,6 +2,13 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 
 const ALG = "aes-256-gcm";
 
+// AES-256-GCM blob layout: IV(12) | authTag(16) | ciphertext. These named offsets
+// replace the magic numbers in decrypt() so the layout is self-documenting.
+const IV_BYTES = 12; // GCM nonce length
+const TAG_BYTES = 16; // GCM auth tag length
+const CT_OFFSET = IV_BYTES + TAG_BYTES; // 28 — ciphertext starts here
+const MIN_BLOB_BYTES = CT_OFFSET + 1; // 29 — IV + tag + ≥1 byte of ciphertext
+
 let _masterKey: Buffer | undefined;
 function masterKey(): Buffer {
   if (_masterKey) return _masterKey;
@@ -15,7 +22,7 @@ function masterKey(): Buffer {
 
 /** AES-256-GCM. Output layout: base64( IV(12) | authTag(16) | ciphertext ). */
 export function encrypt(plain: string): string {
-  const iv = randomBytes(12);
+  const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv(ALG, masterKey(), iv);
   const ct = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64");
@@ -23,10 +30,10 @@ export function encrypt(plain: string): string {
 
 export function decrypt(blob: string): string {
   const buf = Buffer.from(blob, "base64");
-  if (buf.length < 29) throw new Error("ciphertext too short");
-  const decipher = createDecipheriv(ALG, masterKey(), buf.subarray(0, 12));
-  decipher.setAuthTag(buf.subarray(12, 28));
-  return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8");
+  if (buf.length < MIN_BLOB_BYTES) throw new Error("ciphertext too short");
+  const decipher = createDecipheriv(ALG, masterKey(), buf.subarray(0, IV_BYTES));
+  decipher.setAuthTag(buf.subarray(IV_BYTES, CT_OFFSET));
+  return Buffer.concat([decipher.update(buf.subarray(CT_OFFSET)), decipher.final()]).toString("utf8");
 }
 
 export function sha256(s: string): string {

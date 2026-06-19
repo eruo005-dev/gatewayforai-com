@@ -3,7 +3,8 @@ import { redisBreaker } from "@/lib/breaker";
 import { cacheKeyFor, getCached, setCached } from "@/lib/cache";
 import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
-import { errJson, gatewayHeaders, redactKeys } from "@/lib/errors";
+import { errJson, gatewayHeaders } from "@/lib/errors";
+import { bearerKey, redactedErrorResponse } from "@/lib/http";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { estimateCostUsd } from "@/lib/pricing";
 import { checkGatewayIpLimit, checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
@@ -14,10 +15,6 @@ import { recordUsage } from "@/lib/usage";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-function bearerKey(req: Request): string {
-  return (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-}
-
 /** Parse x-gateway-cache header → TTL in seconds (1..86400), or null to skip caching. */
 function parseCacheTtl(req: Request): number | null {
   const raw = req.headers.get("x-gateway-cache");
@@ -25,32 +22,6 @@ function parseCacheTtl(req: Request): number | null {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n)) return null;
   return Math.min(Math.max(n, 1), 86400);
-}
-
-/**
- * Build a non-streaming error Response from a failed upstream, redacting any
- * provider-key fingerprint the upstream echoed into its error message (so the
- * gw-key holder never sees the last-4 of the configured provider key). Reads the
- * body, redacts `error.message` if present, and re-emits with the gateway headers.
- * Only call on the NON-STREAMING error path (it consumes the body).
- */
-async function redactedErrorResponse(
-  upstream: Response,
-  headers: Headers,
-): Promise<Response> {
-  const text = await upstream.text();
-  let outBody = text;
-  try {
-    const parsed = JSON.parse(text);
-    if (typeof parsed?.error?.message === "string") {
-      parsed.error.message = redactKeys(parsed.error.message);
-      outBody = JSON.stringify(parsed);
-    }
-  } catch {
-    // Non-JSON error body: redact the raw string as a best-effort sweep.
-    outBody = redactKeys(text);
-  }
-  return new Response(outBody, { status: upstream.status, headers });
 }
 
 export async function POST(req: Request) {
