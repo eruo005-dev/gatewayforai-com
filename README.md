@@ -4,11 +4,11 @@
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/eruo005-dev/gatewayforai-com/actions/workflows/ci.yml/badge.svg)](https://github.com/eruo005-dev/gatewayforai-com/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-339%20passing-brightgreen.svg)](#development)
+[![tests](https://img.shields.io/badge/tests-371%20passing-brightgreen.svg)](#development)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Made with Next.js](https://img.shields.io/badge/made%20with-Next.js-black.svg)](https://nextjs.org)
 
-> 🇹🇷 Türkçe README: [yapaygecit](https://github.com/eruo005-dev/yapaygecit)
+> 🇹🇷 Türkçe README: [yapaygecit](https://github.com/eruo005-dev/yapaygecit) — The Turkish edition (YapayGeçit) tracks this repo's releases.
 
 GatewayforAI is a single OpenAI- **and** Anthropic-compatible endpoint that sits in
 front of eight LLM providers. Point your existing SDK at it, send `"auto"` as the
@@ -16,18 +16,6 @@ model, and the gateway walks a fallback chain on rate limits, 5xx errors, and
 timeouts — so one provider having a bad day doesn't take your app down with it. You
 bring your own provider keys (BYOK), so there's nothing to pay us and nothing for us
 to meter.
-
-## Why
-
-- **BYOK — you never pay us.** Your provider keys are encrypted at rest (AES-256-GCM);
-  there's no billing relationship, no markup, no usage metering on our side.
-- **Resilience for free.** Automatic fallback, first-token streaming failover, a
-  circuit breaker for degraded providers, and per-key RPM/TPM rate limits.
-- **Drop-in for both ecosystems.** OpenAI-compatible (`/v1/chat/completions`) **and**
-  Anthropic-native (`/v1/messages`) — point either SDK at the gateway, no rewrites.
-- **Self-host in one click, or use the free hosted instance.** Deploy your own to
-  Vercel in a minute, or just point at the public instance below.
-- **MIT licensed.** Fork it, embed it, ship it.
 
 ## Quickstart (hosted)
 
@@ -57,6 +45,25 @@ curl -X POST https://gatewayforai.com/api/config \
   -d '{"providers":{"openai":"sk-...","anthropic":"sk-ant-..."}}'
 # → returns your gw_live_... key ONCE. Store it; only its SHA-256 hash is kept.
 ```
+
+## Why
+
+- **BYOK — you never pay us.** Your provider keys are encrypted at rest (AES-256-GCM);
+  there's no billing relationship, no markup, no usage metering on our side.
+- **Resilience for free.** Automatic fallback, first-token streaming failover, a
+  circuit breaker for degraded providers, and per-key RPM/TPM rate limits.
+- **Drop-in for both ecosystems.** OpenAI-compatible (`/v1/chat/completions`) **and**
+  Anthropic-native (`/v1/messages`) — point either SDK at the gateway, no rewrites.
+- **Self-host in one click, or use the free hosted instance.** Deploy your own to
+  Vercel in a minute, or just point at the public instance below.
+- **MIT licensed.** Fork it, embed it, ship it.
+
+## Status / Security
+
+- 371 tests, CI green on every push to `main`
+- Branch-protected `main`; all merges go through PR + CI
+- Multiple red-team hardening rounds passed; zero secrets in git history
+- AES-256-GCM key encryption, zero prompt logging, SHA-256-only gateway-key storage
 
 ## Deploy your own (1-click)
 
@@ -166,7 +173,9 @@ See the [API reference](#api-reference) for every endpoint and header.
 - `POST/GET/PATCH/DELETE /api/config`, `POST /api/config/rotate` — config management
   (create returns the gateway key once; only its SHA-256 hash is stored).
 - `POST /api/validate-key` — live provider key check.
-- `GET /api/health` — public health probe; returns `{"status":"ok"}` with 200 when the service is up. Use for uptime monitoring.
+- `GET /api/health` — public health probe. Returns `{"ok":true,"redis":true}` (200) when the
+  service is up and Redis is reachable; returns `{"ok":false,"redis":false}` (503) when Redis
+  is unreachable. Use for uptime monitoring.
 - `POST/GET/DELETE /api/config/subkeys` — team sub-key management (Bearer parent key only;
   `gw_sub_` keys return 403 on management routes). Sub-keys (`gw_sub_…`) route through the
   parent's providers and fallback chain but carry their own optional rpm/tpm overrides and their
@@ -179,19 +188,23 @@ See the [API reference](#api-reference) for every endpoint and header.
 
 Next.js 15 App Router route handlers under `src/app` (`/v1/*` for the gateway dialects,
 `/api/*` for config and sub-key management) delegate to the core library in `src/lib`:
-`crypto` (AES-256-GCM key encryption), `config-store` (Redis-backed configs and sub-keys),
-`gateway` (the fallback engine), `providers` (per-provider adapters and the model registry),
-plus `routing`, `cache`, `breaker`, `ratelimit`, `usage`, and the `anthropic` translator.
+
+- `crypto` — AES-256-GCM key encryption
+- `config-store` — Redis-backed configs and sub-keys
+- `gateway` — the fallback engine
+- `providers` — per-provider adapters and the model registry
+- `routing`, `cache`, `breaker`, `ratelimit`, `usage` — supporting subsystems
+- `anthropic` — the Anthropic-dialect translator
+
 The only datastore is **Upstash Redis** — provider keys are encrypted with `MASTER_KEY`, the
 gateway key is stored only as a SHA-256 hash, and prompts/responses are never persisted.
-`src/lib` is fully unit-tested (187 tests total) and the route handlers have integration tests
-on top.
+`src/lib` is fully unit-tested and the route handlers have integration tests on top.
 
 ## Development
 
 ```bash
 npm install
-npm test          # vitest — 187 tests
+npm test          # vitest — runs the full suite (`npm test`)
 npm run build     # next build (typecheck + production build)
 ```
 
