@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { FakeRedis } from "./fake-redis";
 import {
   setRedisForTests, createConfig, getConfig, updateConfig, deleteConfig, rotateKey,
+  resolveGatewayAuth, bumpConfigCreateCount, CONFIG_TTL_SECONDS, CONFIG_CREATE_DAILY_CAP,
 } from "@/lib/config-store";
+import { sha256 } from "@/lib/crypto";
 
 const INPUT = {
   providers: { openai: "sk-openai-123", groq: "gsk-groq-456" },
@@ -104,5 +106,56 @@ describe("config-store", () => {
     await updateConfig("gw_live_test1", { rateLimit: {} as never });
     const cfg = await getConfig("gw_live_test1");
     expect(cfg?.rateLimit.rpm).toBe(60);
+  });
+
+  // ─── FIX 1: config TTL (storage-exhaustion backstop) ──────────────────────
+  it("writes the config record WITH an expiry (CONFIG_TTL_SECONDS)", async () => {
+    await createConfig("gw_live_ttl", INPUT);
+    const key = `config:${sha256("gw_live_ttl")}`;
+    // FakeRedis records the ex passed to set(); a write with no ex would leak the
+    // key forever (unbounded storage). Assert the TTL was attached on write.
+    expect(redis.ttls.get(key)).toBe(CONFIG_TTL_SECONDS);
+  });
+
+  it("resolveGatewayAuth REFRESHES the config TTL on a live read", async () => {
+    await createConfig("gw_live_refresh", INPUT);
+    const key = `config:${sha256("gw_live_refresh")}`;
+    // Simulate a record whose TTL has drifted (e.g. shortened) since the write.
+    redis.ttls.set(key, 5);
+    const auth = await resolveGatewayAuth("gw_live_refresh");
+    expect(auth).not.toBeNull();
+    // The fire-and-forget EXPIRE refresh should bump it back to the full window.
+    expect(redis.ttls.get(key)).toBe(CONFIG_TTL_SECONDS);
+  });
+
+  it("getConfig REFRESHES the config TTL on read", async () => {
+    await createConfig("gw_live_getref", INPUT);
+    const key = `config:${sha256("gw_live_getref")}`;
+    redis.ttls.set(key, 5);
+    await getConfig("gw_live_getref");
+    expect(redis.ttls.get(key)).toBe(CONFIG_TTL_SECONDS);
+  });
+});
+
+// ─── FIX 1: per-IP daily config-creation cap ────────────────────────────────
+describe("bumpConfigCreateCount — daily per-IP creation cap", () => {
+  it("allows up to the cap, then denies", async () => {
+    const ip = "1.2.3.4";
+    // First CAP calls are allowed (count <= cap); the (cap+1)-th is denied.
+    for (let i = 1; i <= CONFIG_CREATE_DAILY_CAP; i++) {
+      const r = await bumpConfigCreateCount(ip);
+      expect(r.allowed).toBe(true);
+      expect(r.count).toBe(i);
+    }
+    const over = await bumpConfigCreateCount(ip);
+    expect(over.allowed).toBe(false);
+    expect(over.count).toBe(CONFIG_CREATE_DAILY_CAP + 1);
+  });
+
+  it("counters are scoped per IP", async () => {
+    await bumpConfigCreateCount("9.9.9.9");
+    const other = await bumpConfigCreateCount("8.8.8.8");
+    expect(other.count).toBe(1);
+    expect(other.allowed).toBe(true);
   });
 });

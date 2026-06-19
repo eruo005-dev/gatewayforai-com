@@ -98,10 +98,76 @@ export async function incrByWithExpire(
   return Number(v);
 }
 
+// ─── Per-IP daily config-creation cap ────────────────────────────────────────
+
+/**
+ * Max configs a single IP may create per UTC day. Backs the existing 20/min IP
+ * limiter with a slower, harder ceiling so a patient attacker can't mint configs
+ * forever (storage-exhaustion / economic-DoS). Overridable via
+ * `CONFIG_CREATE_DAILY_CAP` (default 50).
+ */
+export const CONFIG_CREATE_DAILY_CAP = (() => {
+  const raw = process.env.CONFIG_CREATE_DAILY_CAP;
+  const n = raw ? parseInt(raw, 10) : 50;
+  return Number.isFinite(n) && n > 0 ? n : 50;
+})();
+
+function utcDateStamp(nowMs = Date.now()): string {
+  return new Date(nowMs).toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+}
+
+/**
+ * Atomically count this IP's config creations for the current UTC day and report
+ * whether the daily cap is now exceeded. The counter key
+ * `configs:created:<ip>:<YYYY-MM-DD>` carries a ~2-day TTL so it self-evicts.
+ * Returns { allowed, count } — `allowed=false` once the post-increment count
+ * exceeds CONFIG_CREATE_DAILY_CAP. Fails OPEN on any Redis error (this is a
+ * backstop, not the primary gate; the 20/min limiter and auth still apply).
+ */
+export async function bumpConfigCreateCount(
+  ip: string,
+  nowMs = Date.now(),
+): Promise<{ allowed: boolean; count: number }> {
+  const key = `configs:created:${ip}:${utcDateStamp(nowMs)}`;
+  try {
+    const count = await incrByWithExpire(key, 1, 2 * 24 * 60 * 60);
+    return { allowed: count <= CONFIG_CREATE_DAILY_CAP, count };
+  } catch {
+    return { allowed: true, count: 0 }; // fail open
+  }
+}
+
 const configKey = (hash: string) => `config:${hash}`;
 const subkeyKey = (hash: string) => `subkey:${hash}`;
 
 const SUB_KEY_LIMIT = 20;
+
+/**
+ * Config-record TTL (seconds). Read once at module load from `CONFIG_TTL_DAYS`
+ * (default 90 days). Storage-exhaustion / economic-DoS backstop: without a TTL a
+ * caller could mint configs forever and the store would grow unbounded.
+ *
+ * Policy — "active configs are kept alive, idle ones expire": every write sets
+ * this TTL, and every READ path that authenticates a LIVE request refreshes it
+ * (fire-and-forget `EXPIRE`). So a config that is actually being used never
+ * lapses, while one that is abandoned (no auth/use) expires after CONFIG_TTL_DAYS.
+ */
+export const CONFIG_TTL_SECONDS = (() => {
+  const raw = process.env.CONFIG_TTL_DAYS;
+  const days = raw ? parseInt(raw, 10) : 90;
+  const safeDays = Number.isFinite(days) && days > 0 ? days : 90;
+  return safeDays * 24 * 60 * 60;
+})();
+
+/**
+ * Fire-and-forget TTL refresh for an active config. Called from read paths that
+ * authenticate a live request so that in-use configs never expire. Best-effort:
+ * any error is swallowed — a missed refresh only shortens the idle window, it
+ * never breaks the request.
+ */
+function refreshConfigTtl(hash: string): void {
+  void Promise.resolve(redis().expire(configKey(hash), CONFIG_TTL_SECONDS)).catch(() => {});
+}
 
 interface SubKeyRecord {
   parentHash: string;
@@ -135,7 +201,10 @@ async function loadStoredByHash(hash: string): Promise<StoredConfig | null> {
 }
 
 async function saveStoredByHash(hash: string, stored: StoredConfig): Promise<void> {
-  await redis().set(configKey(hash), JSON.stringify(stored));
+  // Always write WITH an expiry (CONFIG_TTL_SECONDS). Active configs get their TTL
+  // refreshed on every authenticated read (see refreshConfigTtl); abandoned ones
+  // lapse after the idle window, capping storage growth.
+  await redis().set(configKey(hash), JSON.stringify(stored), { ex: CONFIG_TTL_SECONDS });
 }
 
 async function loadStored(gatewayKey: string): Promise<StoredConfig | null> {
@@ -163,8 +232,11 @@ export async function createConfig(
 }
 
 export async function getConfig(gatewayKey: string): Promise<GatewayConfig | null> {
-  const stored = await loadStored(gatewayKey);
+  const hash = sha256(gatewayKey);
+  const stored = await loadStoredByHash(hash);
   if (!stored) return null;
+  // Keep-alive: a live read of this config refreshes its idle-expiry window.
+  refreshConfigTtl(hash);
   return {
     ...stored,
     providers: Object.fromEntries(
@@ -339,6 +411,10 @@ export async function resolveGatewayAuth(key: string): Promise<GatewayAuthResult
     );
     if (!stored) return null;
 
+    // Keep-alive: an authenticated sub-key request refreshes the PARENT config's
+    // idle-expiry window (the parent record is what holds the providers/limits).
+    refreshConfigTtl(record.parentHash);
+
     const config: GatewayConfig = {
       ...stored,
       providers: Object.fromEntries(
@@ -380,6 +456,9 @@ export async function resolveGatewayAuth(key: string): Promise<GatewayAuthResult
   const hash = sha256(key);
   const stored = await withTimeout(loadStoredByHash(hash), REDIS_TIMEOUT_MS, () => null);
   if (!stored) return null;
+
+  // Keep-alive: an authenticated live request refreshes this config's idle-expiry.
+  refreshConfigTtl(hash);
 
   const config: GatewayConfig = {
     ...stored,

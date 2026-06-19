@@ -1,5 +1,5 @@
 import {
-  createConfig, deleteConfig, getConfig, updateConfig,
+  bumpConfigCreateCount, createConfig, deleteConfig, getConfig, updateConfig,
 } from "@/lib/config-store";
 import { clientIp } from "@/lib/client-ip";
 import { generateGatewayKey, maskKey, sha256 } from "@/lib/crypto";
@@ -26,6 +26,17 @@ function bearerKey(req: Request): string {
 export async function POST(req: Request) {
   const gate = await ipGate(req);
   if (gate) return gate;
+
+  // Daily per-IP creation cap — a slower, harder ceiling behind the 20/min IP
+  // limiter so a patient attacker can't mint configs indefinitely (storage DoS).
+  const created = await bumpConfigCreateCount(clientIp(req));
+  if (!created.allowed) {
+    return errJson(
+      429,
+      "rate_limit_exceeded",
+      "Daily config-creation limit reached for this IP. Try again tomorrow.",
+    );
+  }
 
   let body: unknown;
   try {
