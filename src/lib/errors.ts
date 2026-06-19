@@ -30,6 +30,37 @@ export function redactKeys(s: string): string {
     .replace(/AIza[A-Za-z0-9_*.…-]{2,}/g, "AIza***redacted***");
 }
 
+/**
+ * Build a FRESH set of response headers for any /v1/* pass-through, carrying ONLY
+ * a whitelist: the upstream `content-type` (if present) plus the gateway's own
+ * observability headers. NOTHING else from the upstream Response is copied.
+ *
+ * Why a whitelist (not a blocklist): wholesale-copying upstream headers leaks
+ * provider-side data to the gw-key holder and breaks the body:
+ *   - `x-error-json` / `openai-*` / `x-oai-*` / `x-request-id` / `set-cookie` /
+ *     `cf-*` / `x-ratelimit-*` would leak the provider key fingerprint, request
+ *     ids, cookies and upstream rate-limit state to the caller.
+ *   - a copied `content-length` / `content-encoding` / `transfer-encoding` would
+ *     mismatch a redacted/rebuilt (shorter) body → the client hangs until
+ *     maxDuration. Dropping them lets the runtime recompute the correct length.
+ *
+ * `gateway` holds the x-gateway-* headers the route already built (provider,
+ * fallback-count, latency-ms, cache, cost-estimate-usd, route) plus retry-after
+ * where the route sets it. Pass `upstream = null` when there is no upstream
+ * response (e.g. a stream the route synthesizes); then content-type is left to
+ * the caller's `gateway` map or the runtime default.
+ */
+export function gatewayHeaders(
+  upstream: Response | null,
+  gateway: Record<string, string>,
+): Headers {
+  const out = new Headers();
+  const ct = upstream?.headers.get("content-type");
+  if (ct) out.set("content-type", ct);
+  for (const [k, v] of Object.entries(gateway)) out.set(k, v);
+  return out;
+}
+
 export function errJson(
   status: number,
   code: string,

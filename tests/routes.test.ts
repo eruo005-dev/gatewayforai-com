@@ -391,6 +391,56 @@ describe("POST /v1/chat/completions", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBeTruthy();
   });
+
+  // ─── Header whitelist: no upstream-header / key-fingerprint leak (RED-TEAM) ──
+  it("error path: drops leaky upstream headers + stale content-length, redacts key, keeps x-gateway-*", async () => {
+    // Upstream returns a 401 whose headers carry a key fingerprint (x-error-json),
+    // a cookie, an openai version header, and a content-length that does NOT match
+    // our (redacted) body. The gateway response must carry NONE of those and a
+    // redacted body — and still emit the x-gateway-* observability headers.
+    const upstreamBody = JSON.stringify({
+      error: { message: "Incorrect API key provided: sk-proj-************9999", type: "invalid_request_error" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(upstreamBody, {
+          status: 401,
+          headers: {
+            "content-type": "application/json",
+            "content-length": "999",
+            "set-cookie": "sess=x",
+            "x-error-json": "eyJrIjoic2stcHJvai05OTk5In0=",
+            "x-openai-version": "1",
+            "x-request-id": "req-abc",
+          },
+        }),
+      ),
+    );
+    const res = await chatPOST(
+      req("http://t/v1/chat/completions", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/gpt-4o", messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+    expect(res.status).toBe(401);
+    // Leaky upstream headers dropped:
+    expect(res.headers.get("x-error-json")).toBeNull();
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(res.headers.get("x-openai-version")).toBeNull();
+    expect(res.headers.get("x-request-id")).toBeNull();
+    // Stale upstream content-length (999) must not survive — runtime recomputes.
+    expect(res.headers.get("content-length")).not.toBe("999");
+    // Gateway observability headers preserved:
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
+    expect(res.headers.get("x-gateway-fallback-count")).toBeTruthy();
+    // Body fingerprint redacted:
+    const text = await res.text();
+    expect(text).not.toContain("9999");
+    expect(text).not.toContain("sk-proj-");
+    expect(text).toContain("sk-***redacted***");
+  });
 });
 
 // ─── /v1/messages: Anthropic error-shape on every path ───────────────────────
@@ -589,6 +639,76 @@ describe("POST /v1/embeddings — validation", () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("x-gateway-provider")).toBe("openai");
+  });
+
+  // ─── HIGH-2: embeddings was fully unredacted + copied upstream headers ───────
+  it("success path: drops leaky upstream headers (no x-error-json/set-cookie/content-length leak)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ object: "list", data: [{ embedding: [0.1, 0.2] }] }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-length": "999",
+            "set-cookie": "sess=x",
+            "x-openai-version": "1",
+            "x-request-id": "req-emb",
+          },
+        }),
+      ),
+    );
+    const res = await embeddingsPOST(
+      req("http://t/v1/embeddings", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: "hi" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(res.headers.get("x-openai-version")).toBeNull();
+    expect(res.headers.get("x-request-id")).toBeNull();
+    expect(res.headers.get("content-length")).not.toBe("999");
+  });
+
+  it("error path: redacts key fingerprint + drops x-error-json/content-length, keeps x-gateway-provider", async () => {
+    const upstreamBody = JSON.stringify({
+      error: { message: "Incorrect API key provided: sk-proj-************9999", type: "invalid_request_error" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(upstreamBody, {
+          status: 401,
+          headers: {
+            "content-type": "application/json",
+            "content-length": "999",
+            "set-cookie": "sess=x",
+            "x-error-json": "eyJrIjoic2stcHJvai05OTk5In0=",
+            "x-openai-version": "1",
+          },
+        }),
+      ),
+    );
+    const res = await embeddingsPOST(
+      req("http://t/v1/embeddings", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: "hi" }),
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get("x-error-json")).toBeNull();
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(res.headers.get("x-openai-version")).toBeNull();
+    expect(res.headers.get("content-length")).not.toBe("999");
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
+    const text = await res.text();
+    expect(text).not.toContain("9999");
+    expect(text).not.toContain("sk-proj-");
+    expect(text).toContain("sk-***redacted***");
   });
 });
 

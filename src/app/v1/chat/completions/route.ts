@@ -3,7 +3,7 @@ import { redisBreaker } from "@/lib/breaker";
 import { cacheKeyFor, getCached, setCached } from "@/lib/cache";
 import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
-import { errJson, redactKeys } from "@/lib/errors";
+import { errJson, gatewayHeaders, redactKeys } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { estimateCostUsd } from "@/lib/pricing";
 import { checkGatewayIpLimit, checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
@@ -191,11 +191,16 @@ export async function POST(req: Request) {
       }).catch(() => {}),
     );
 
-    const headers = new Headers(result.response.headers);
-    headers.set("x-gateway-provider", result.provider);
-    headers.set("x-gateway-fallback-count", String(result.fallbacks));
-    headers.set("x-gateway-latency-ms", String(Date.now() - started));
-    if (routeStrategy) headers.set("x-gateway-route", routeStrategy);
+    // Whitelist response headers: ONLY content-type (from upstream) + the
+    // x-gateway-* observability headers. Drops upstream content-length (would
+    // mismatch a redacted body → client hang) and any leaky upstream headers
+    // (x-error-json, set-cookie, openai-*, request-ids, …).
+    const headers = gatewayHeaders(result.response, {
+      "x-gateway-provider": result.provider,
+      "x-gateway-fallback-count": String(result.fallbacks),
+      "x-gateway-latency-ms": String(Date.now() - started),
+      ...(routeStrategy && { "x-gateway-route": routeStrategy }),
+    });
 
     if (
       result.response.ok &&
@@ -267,11 +272,16 @@ export async function POST(req: Request) {
     after(() => recordTokens(keyHash, -estimatedTokens).catch(() => {}));
   }
 
-  const headers = new Headers(result.response.headers);
-  headers.set("x-gateway-provider", result.provider);
-  headers.set("x-gateway-fallback-count", String(result.fallbacks));
-  headers.set("x-gateway-latency-ms", String(Date.now() - started));
-  if (routeStrategy) headers.set("x-gateway-route", routeStrategy);
+  // Whitelist response headers (see cache-miss path above). For a streaming
+  // pass-through this also keeps the upstream text/event-stream content-type
+  // while dropping content-length/transfer-encoding so the runtime frames the
+  // stream correctly.
+  const headers = gatewayHeaders(result.response, {
+    "x-gateway-provider": result.provider,
+    "x-gateway-fallback-count": String(result.fallbacks),
+    "x-gateway-latency-ms": String(Date.now() - started),
+    ...(routeStrategy && { "x-gateway-route": routeStrategy }),
+  });
   // On a non-streaming, non-ok upstream, redact any provider-key fingerprint in
   // the error body. Streaming bodies are passed through untouched (can't buffer).
   if (!body.stream && !result.response.ok) {

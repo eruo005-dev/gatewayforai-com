@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { errJson, redactKeys } from "@/lib/errors";
+import { errJson, gatewayHeaders, redactKeys } from "@/lib/errors";
 
 describe("errJson", () => {
   it("emits OpenAI-style error JSON with mapped type", async () => {
@@ -50,5 +50,62 @@ describe("redactKeys", () => {
 
   it("is safe on empty input", () => {
     expect(redactKeys("")).toBe("");
+  });
+});
+
+// ─── gatewayHeaders — whitelist upstream → client response headers ────────────
+describe("gatewayHeaders", () => {
+  function upstreamWithLeakyHeaders(): Response {
+    return new Response("body", {
+      headers: {
+        "content-type": "application/json",
+        "content-length": "999",
+        "content-encoding": "gzip",
+        "transfer-encoding": "chunked",
+        "set-cookie": "sess=abc",
+        "x-error-json": "eyJrZXkiOiJzay1wcm9qLTk5OTkifQ==",
+        "x-openai-version": "1",
+        "x-oai-internal": "secret",
+        "openai-organization": "org-123",
+        "x-request-id": "req-xyz",
+        "cf-ray": "abc123",
+        "x-ratelimit-remaining": "0",
+      },
+    });
+  }
+
+  it("copies ONLY upstream content-type plus the gateway headers", () => {
+    const out = gatewayHeaders(upstreamWithLeakyHeaders(), {
+      "x-gateway-provider": "openai",
+      "x-gateway-fallback-count": "0",
+    });
+    expect(out.get("content-type")).toBe("application/json");
+    expect(out.get("x-gateway-provider")).toBe("openai");
+    expect(out.get("x-gateway-fallback-count")).toBe("0");
+  });
+
+  it("drops every leaky / framing upstream header", () => {
+    const out = gatewayHeaders(upstreamWithLeakyHeaders(), { "x-gateway-provider": "openai" });
+    for (const h of [
+      "content-length",
+      "content-encoding",
+      "transfer-encoding",
+      "set-cookie",
+      "x-error-json",
+      "x-openai-version",
+      "x-oai-internal",
+      "openai-organization",
+      "x-request-id",
+      "cf-ray",
+      "x-ratelimit-remaining",
+    ]) {
+      expect(out.get(h)).toBeNull();
+    }
+  });
+
+  it("accepts a null upstream (synthesized stream) and still emits gateway headers", () => {
+    const out = gatewayHeaders(null, { "content-type": "text/event-stream", "x-gateway-provider": "groq" });
+    expect(out.get("content-type")).toBe("text/event-stream");
+    expect(out.get("x-gateway-provider")).toBe("groq");
   });
 });

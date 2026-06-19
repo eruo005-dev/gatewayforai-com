@@ -261,7 +261,19 @@ export async function updateConfig(gatewayKey: string, patch: ConfigPatch): Prom
 }
 
 export async function deleteConfig(gatewayKey: string): Promise<boolean> {
-  return (await redis().del(configKey(sha256(gatewayKey)))) > 0;
+  const hash = sha256(gatewayKey);
+  // Read the config first so we can also delete its sub-key records — otherwise
+  // each `subkey:<hash>` record would linger forever (orphaned storage leak,
+  // LOW-1) since the parent index that pointed to them is gone.
+  const stored = await loadStoredByHash(hash);
+  const deleted = (await redis().del(configKey(hash))) > 0;
+  if (deleted && stored?.subKeys) {
+    const subHashes = Object.keys(stored.subKeys);
+    if (subHashes.length > 0) {
+      await redis().del(...subHashes.map(subkeyKey));
+    }
+  }
+  return deleted;
 }
 
 /**

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { FakeRedis } from "./fake-redis";
 import {
   setRedisForTests, createConfig, getConfig, updateConfig, deleteConfig, rotateKey,
-  resolveGatewayAuth, bumpConfigCreateCount, CONFIG_TTL_SECONDS, CONFIG_CREATE_DAILY_CAP,
+  resolveGatewayAuth, bumpConfigCreateCount, createSubKey, CONFIG_TTL_SECONDS, CONFIG_CREATE_DAILY_CAP,
 } from "@/lib/config-store";
 import { sha256 } from "@/lib/crypto";
 
@@ -65,6 +65,19 @@ describe("config-store", () => {
     await createConfig("gw_live_test1", INPUT);
     expect(await deleteConfig("gw_live_test1")).toBe(true);
     expect(await getConfig("gw_live_test1")).toBeNull();
+  });
+
+  it("deleting a config also deletes its sub-key records (LOW-1: no orphans)", async () => {
+    await createConfig("gw_live_test1", INPUT);
+    const sub = (await createSubKey("gw_live_test1", { label: "worker" }))!;
+    const subHash = sha256(sub);
+    // The subkey record exists before deletion…
+    expect(redis.store.has(`subkey:${subHash}`)).toBe(true);
+    expect(await deleteConfig("gw_live_test1")).toBe(true);
+    // …and is gone after (would otherwise linger forever, orphaned).
+    expect(redis.store.has(`subkey:${subHash}`)).toBe(false);
+    // The sub-key can no longer authenticate (its record is gone).
+    expect(await resolveGatewayAuth(sub)).toBeNull();
   });
 
   it("rotates: old key dead, new key works, data intact", async () => {

@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
-import { errJson } from "@/lib/errors";
+import { errJson, gatewayHeaders, redactKeys } from "@/lib/errors";
 import { PROVIDERS } from "@/lib/providers/registry";
 import { checkGatewayIpLimit, checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
 import type { ProviderId } from "@/lib/types";
@@ -124,7 +124,31 @@ export async function POST(req: Request) {
     }).catch(() => {}),
   );
 
-  const headers = new Headers(response.headers);
-  headers.set("x-gateway-provider", provider);
+  // Whitelist response headers: ONLY content-type (from upstream) + the gateway
+  // observability header. Drops upstream content-length (would mismatch a
+  // redacted error body → client hang) and every leaky upstream header
+  // (x-error-json, set-cookie, openai-*, request-ids, …) — this route previously
+  // copied them all wholesale (HIGH-2).
+  const headers = gatewayHeaders(response, { "x-gateway-provider": provider });
+
+  // Error path: redact any provider-key fingerprint the upstream echoed into its
+  // error body before surfacing it to the gw-key holder. This route did NO
+  // redaction before (HIGH-2). The X-Error-Json header is already dropped by the
+  // whitelist above; here we also scrub the body.
+  if (!response.ok) {
+    const text = await response.text();
+    let outBody = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed?.error?.message === "string") {
+        parsed.error.message = redactKeys(parsed.error.message);
+        outBody = JSON.stringify(parsed);
+      }
+    } catch {
+      outBody = redactKeys(text);
+    }
+    return new Response(outBody, { status: response.status, headers });
+  }
+
   return new Response(response.body, { status: response.status, headers });
 }

@@ -13,7 +13,14 @@ export class FakeRedis {
     if (opts?.ex !== undefined) this.ttls.set(k, opts.ex);
     return "OK";
   }
-  async del(k: string) { this.ttls.delete(k); return this.store.delete(k) ? 1 : 0; }
+  async del(...keys: string[]) {
+    let n = 0;
+    for (const k of keys) {
+      this.ttls.delete(k);
+      if (this.store.delete(k)) n++;
+    }
+    return n;
+  }
 
   async incr(k: string) {
     const v = Number(this.store.get(k) ?? 0) + 1;
