@@ -90,4 +90,17 @@ describe("guardFirstToken", () => {
     const guarded = await guardFirstToken(streamOf(input), 1000);
     expect(await collect(guarded)).toBe(input.join(""));
   });
+
+  it("a 'data:' LINE split across two chunks AFTER a complete preamble line → commits (lineBuf carry)", async () => {
+    // chunk 1 ends a complete preamble comment line, THEN starts the next line
+    // with a bare "da" (no newline yet). chunk 2 supplies "ta: real\n\n".
+    // The detector must CARRY the partial "da" across the chunk boundary and only
+    // then see a complete "data: real" line. A mutation that resets the line
+    // buffer per chunk would see neither chunk start a line with "data:" and would
+    // hang → StreamDiedAtBirth on timeout. This pins the cross-chunk carry.
+    const input = [": ready\nda", "ta: real\n\n", "data: [DONE]\n\n"];
+    const guarded = await guardFirstToken(streamOf(input), 1000);
+    // Output is byte-identical to the concatenated input (carry is detection-only).
+    expect(await collect(guarded)).toBe(input.join(""));
+  });
 });

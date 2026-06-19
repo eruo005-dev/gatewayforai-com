@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { FakeRedis } from "./fake-redis";
-import { setRedisForTests, createConfig, createSubKey, resolveGatewayAuth } from "@/lib/config-store";
+import { setRedisForTests, createConfig, createSubKey, resolveGatewayAuth, getConfig } from "@/lib/config-store";
 import { sha256 } from "@/lib/crypto";
+import * as ratelimit from "@/lib/ratelimit";
 
 /**
  * Route-handler integration tests.
@@ -40,7 +41,9 @@ vi.mock("@/lib/ratelimit", () => ({
 // Import route handlers AFTER the mock is declared (vi.mock is hoisted, so order
 // is cosmetic, but keep it explicit).
 import { POST as subkeysPOST, GET as subkeysGET, DELETE as subkeysDELETE } from "@/app/api/config/subkeys/route";
-import { GET as configGET, POST as configPOST } from "@/app/api/config/route";
+import { GET as configGET, POST as configPOST, PATCH as configPATCH, DELETE as configDELETE } from "@/app/api/config/route";
+import { POST as rotatePOST } from "@/app/api/config/rotate/route";
+import { POST as validateKeyPOST } from "@/app/api/validate-key/route";
 import { POST as chatPOST } from "@/app/v1/chat/completions/route";
 import { POST as messagesPOST } from "@/app/v1/messages/route";
 import { POST as embeddingsPOST } from "@/app/v1/embeddings/route";
@@ -783,6 +786,19 @@ describe("GET /v1/models", () => {
     const res = await modelsGET(req("http://t/v1/models", { bearer: "garbage" }));
     expect(res.status).toBe(429);
   });
+
+  it("per-KEY RPM limit trip → 429 with retry-after, after auth (FIX 4)", async () => {
+    // The per-KEY limiter runs AFTER auth: a valid key whose RPM is exhausted must
+    // 429 (so one key can't fan out unthrottled upstream /models fetches). Force
+    // checkRateLimit to deny; the per-IP gate stays open so this isolates the key
+    // limit. If the per-key gate were missing this would reach the 200 list path.
+    rlState.rpm = { success: false, reset: Date.now() + 30_000 };
+    const res = await modelsGET(req("http://t/v1/models", { bearer: PARENT_KEY }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBeTruthy();
+    const body = await res.json();
+    expect(body.error.code).toBe("rate_limit_exceeded");
+  });
 });
 
 // ─── POST /api/config: create config (HIGH 9) ───────────────────────────────
@@ -857,5 +873,225 @@ describe("GET /api/health", () => {
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.ok).toBe(false);
+  });
+});
+
+// ─── POST /api/config/rotate: 401 / 200 new key / 429 IP-gated ───────────────
+describe("POST /api/config/rotate", () => {
+  it("rejects an unknown gw key with 401", async () => {
+    const res = await rotatePOST(
+      req("http://t/api/config/rotate", { method: "POST", bearer: "gw_live_unknown" }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects a non-gw bearer with 401", async () => {
+    const res = await rotatePOST(
+      req("http://t/api/config/rotate", { method: "POST", bearer: "sk-not-a-gw-key" }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("rotates the PARENT key → 200 with a fresh gw_live_ key; old key dead", async () => {
+    const res = await rotatePOST(
+      req("http://t/api/config/rotate", { method: "POST", bearer: PARENT_KEY }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.gatewayKey).toMatch(/^gw_live_/);
+    // New key resolves; old key no longer does.
+    expect(await getConfig(body.gatewayKey)).not.toBeNull();
+    expect(await getConfig(PARENT_KEY)).toBeNull();
+  });
+
+  it("ipGate forced fail → 429 (before rotate)", async () => {
+    rlState.ip = { success: false, reset: Date.now() + 30_000 };
+    const res = await rotatePOST(
+      req("http://t/api/config/rotate", { method: "POST", bearer: PARENT_KEY }),
+    );
+    expect(res.status).toBe(429);
+    // The config must NOT have been rotated away.
+    expect(await getConfig(PARENT_KEY)).not.toBeNull();
+  });
+});
+
+// ─── POST /api/validate-key: 400 bad provider / {valid} shape / 429 ──────────
+describe("POST /api/validate-key", () => {
+  it("400 on an unknown provider", async () => {
+    const res = await validateKeyPOST(
+      req("http://t/api/validate-key", {
+        method: "POST",
+        body: JSON.stringify({ provider: "nope", key: "sk-whatever" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("400 on a prototype-pollution provider name (__proto__)", async () => {
+    // Object.hasOwn (not truthiness) must reject inherited members.
+    const res = await validateKeyPOST(
+      req("http://t/api/validate-key", {
+        method: "POST",
+        body: JSON.stringify({ provider: "__proto__", key: "sk-whatever" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("returns { valid:true } when the provider /models probe is ok (fetch stubbed)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const res = await validateKeyPOST(
+      req("http://t/api/validate-key", {
+        method: "POST",
+        body: JSON.stringify({ provider: "openai", key: "sk-test-key" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ valid: true });
+  });
+
+  it("returns { valid:false } when the probe is non-ok (fetch stubbed)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 401 })));
+    const res = await validateKeyPOST(
+      req("http://t/api/validate-key", {
+        method: "POST",
+        body: JSON.stringify({ provider: "openai", key: "sk-bad-key" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ valid: false });
+  });
+
+  it("ipGate forced fail → 429", async () => {
+    rlState.ip = { success: false, reset: Date.now() + 30_000 };
+    const res = await validateKeyPOST(
+      req("http://t/api/validate-key", {
+        method: "POST",
+        body: JSON.stringify({ provider: "openai", key: "sk-test-key" }),
+      }),
+    );
+    expect(res.status).toBe(429);
+  });
+});
+
+// ─── PATCH /api/config: merge → 200+persist / bad merge → 400 / 401 unknown ──
+describe("PATCH /api/config", () => {
+  it("valid merge → 200 and the change is persisted", async () => {
+    const res = await configPATCH(
+      req("http://t/api/config", {
+        method: "PATCH",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ rateLimit: { rpm: 99 } }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    // Persisted: re-read the config and confirm the new rpm landed.
+    const cfg = await getConfig(PARENT_KEY);
+    expect(cfg?.rateLimit.rpm).toBe(99);
+  });
+
+  it("invalid merge (unknown provider) → 400 and nothing persists", async () => {
+    const res = await configPATCH(
+      req("http://t/api/config", {
+        method: "PATCH",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ providers: { bogusprovider: "sk-x-1234567890123456" } }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    // The bogus provider must not have been written.
+    const cfg = await getConfig(PARENT_KEY);
+    expect((cfg?.providers as Record<string, unknown>).bogusprovider).toBeUndefined();
+  });
+
+  it("unknown gw key → 401", async () => {
+    const res = await configPATCH(
+      req("http://t/api/config", {
+        method: "PATCH",
+        bearer: "gw_live_unknown",
+        body: JSON.stringify({ rateLimit: { rpm: 10 } }),
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("ipGate forced fail → 429", async () => {
+    rlState.ip = { success: false, reset: Date.now() + 30_000 };
+    const res = await configPATCH(
+      req("http://t/api/config", {
+        method: "PATCH",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ rateLimit: { rpm: 10 } }),
+      }),
+    );
+    expect(res.status).toBe(429);
+  });
+});
+
+// ─── DELETE /api/config: 200 + sub-key cascade / 401 unknown ─────────────────
+describe("DELETE /api/config", () => {
+  it("200 and cascades sub-key records (subkey record gone after)", async () => {
+    const subHash = sha256(subKey);
+    expect(redis.store.has(`subkey:${subHash}`)).toBe(true);
+    const res = await configDELETE(req("http://t/api/config", { method: "DELETE", bearer: PARENT_KEY }));
+    expect(res.status).toBe(200);
+    // Config gone AND its sub-key record cascaded (no orphan).
+    expect(await getConfig(PARENT_KEY)).toBeNull();
+    expect(redis.store.has(`subkey:${subHash}`)).toBe(false);
+    expect(await resolveGatewayAuth(subKey)).toBeNull();
+  });
+
+  it("unknown gw key → 401", async () => {
+    const res = await configDELETE(req("http://t/api/config", { method: "DELETE", bearer: "gw_live_unknown" }));
+    expect(res.status).toBe(401);
+  });
+});
+
+// ─── TPM reconcile: signed (actual − estimate) delta recorded post-chat ──────
+describe("TPM reconciliation on a successful non-stream chat", () => {
+  it("records the signed (actual − estimate) delta via recordTokens", async () => {
+    // PARENT_KEY has tpm:50_000, so the chat route reserves the estimate up front
+    // then reconciles with the delta = usage.total_tokens − estimate. The reconcile
+    // happens on the path that READS the JSON body (the cacheable / cache-miss
+    // path), so we send x-gateway-cache to take it. We stub the upstream so
+    // usage.total_tokens is a known, large value, making the delta unambiguous,
+    // then inspect the recordTokens spy for that exact delta.
+    const recordTokensSpy = ratelimit.recordTokens as unknown as ReturnType<typeof vi.fn>;
+    recordTokensSpy.mockClear();
+
+    const messages = [{ role: "user", content: "hi" }];
+    const estimate = Math.ceil(JSON.stringify(messages).length / 4);
+    const ACTUAL = estimate + 1234; // guarantee a non-zero positive delta
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            id: "chatcmpl-recon",
+            model: "gpt-4o",
+            choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+            usage: { total_tokens: ACTUAL },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    const res = await chatPOST(
+      req("http://t/v1/chat/completions", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        headers: { "x-gateway-cache": "60" }, // take the body-reading (reconcile) path
+        body: JSON.stringify({ model: "openai/gpt-4o", messages }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const keyHash = sha256(PARENT_KEY);
+    const calls = recordTokensSpy.mock.calls;
+    // The reservation (estimate) must have been charged…
+    expect(calls).toContainEqual([keyHash, estimate]);
+    // …and the reconciliation must record exactly the signed delta (actual − estimate).
+    expect(calls).toContainEqual([keyHash, ACTUAL - estimate]);
   });
 });
