@@ -148,8 +148,9 @@ export default function Manage() {
 
       <div className="panel">
         <div className="field">
-          <label>gw key</label>
+          <label htmlFor="gwkey">gw key</label>
           <input
+            id="gwkey"
             type="password"
             placeholder="gw_live_…"
             value={key}
@@ -261,7 +262,7 @@ export default function Manage() {
                 </thead>
                 <tbody>
                   {subKeys.map((sk) => (
-                    <tr key={sk.id} style={{ borderTop: "1px solid var(--border)" }}>
+                    <tr key={sk.id} style={{ borderTop: "1px solid var(--line)" }}>
                       <td style={{ padding: "6px 8px 6px 0" }}>{sk.label}</td>
                       <td style={{ padding: "6px 8px", fontFamily: "var(--mono)", fontSize: 12 }}>{sk.id}</td>
                       <td style={{ padding: "6px 8px" }}>{sk.rpm ?? "parent"}</td>

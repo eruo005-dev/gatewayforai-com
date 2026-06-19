@@ -15,20 +15,24 @@ const PROVIDERS = [
 ] as const;
 
 type Validity = "unknown" | "checking" | "ok" | "bad";
+type BadReason = "rejected" | "network";
 
 export default function Start() {
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [valid, setValid] = useState<Record<string, Validity>>({});
+  const [badReason, setBadReason] = useState<Record<string, BadReason>>({});
   const [chain, setChain] = useState<Array<{ provider: string; model: string }>>([]);
   const [rpm, setRpm] = useState(60);
   const [tpm, setTpm] = useState(0); // 0 = off
   const [gatewayKey, setGatewayKey] = useState("");
+  const [copyLabel, setCopyLabel] = useState("Copy key");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   function setKey(provider: string, value: string) {
     setKeys((k) => ({ ...k, [provider]: value }));
     setValid((v) => ({ ...v, [provider]: "unknown" }));
+    setBadReason((r) => { const next = { ...r }; delete next[provider]; return next; });
     setChain((c) => {
       const has = c.some((e) => e.provider === provider);
       if (value.trim() && !has) {
@@ -52,8 +56,10 @@ export default function Start() {
       });
       const { valid: ok } = await res.json();
       setValid((v) => ({ ...v, [provider]: ok ? "ok" : "bad" }));
+      if (!ok) setBadReason((r) => ({ ...r, [provider]: "rejected" }));
     } catch {
       setValid((v) => ({ ...v, [provider]: "bad" }));
+      setBadReason((r) => ({ ...r, [provider]: "network" }));
     }
   }
 
@@ -123,8 +129,15 @@ res = client.chat.completions.create(
           <h3>Gateway key — shown once, never again</h3>
           <p className="hint">We store only a hash. Copy it now.</p>
           <div className="keybox">{gatewayKey}</div>
-          <button className="btn primary" onClick={() => navigator.clipboard.writeText(gatewayKey)}>
-            Copy key
+          <button
+            className="btn primary"
+            onClick={() => {
+              navigator.clipboard.writeText(gatewayKey);
+              setCopyLabel("Copied ✓");
+              setTimeout(() => setCopyLabel("Copy key"), 2000);
+            }}
+          >
+            {copyLabel}
           </button>
         </div>
         {([["JavaScript", s.js], ["Python", s.py], ["curl", s.curl]] as const).map(([label, code]) => (
@@ -165,6 +178,11 @@ res = client.chat.completions.create(
             <span className={`badge ${valid[p.id] === "ok" ? "ok" : valid[p.id] === "bad" ? "bad" : ""}`}>
               {valid[p.id] === "ok" ? "✓" : valid[p.id] === "bad" ? "✗" : valid[p.id] === "checking" ? "…" : ""}
             </span>
+            {valid[p.id] === "bad" && (
+              <span style={{ fontSize: 12, color: "var(--red)", marginLeft: 6 }}>
+                {badReason[p.id] === "network" ? "Couldn't verify — try again" : "Key rejected by provider"}
+              </span>
+            )}
           </div>
         ))}
       </div>

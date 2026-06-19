@@ -3,7 +3,7 @@ import RouteDiagram from "@/components/RouteDiagram";
 import Terminal from "@/components/Terminal";
 
 const FEATURES = [
-  ["[~>]", "Automatic fallback", "A provider returns 429 or 500? The request reroutes to the next provider in your chain mid-flight. Your request automatically retries the next provider in your chain."],
+  ["[~>]", "Automatic fallback", "A provider returns 429 or 500? The gateway fails over to the next provider in your chain before a single token streams back."],
   ["[##]", "Rate limiting", "Per-key sliding-window limits you control. Protect your budget from runaway loops and abusive clients."],
   ["[8x]", "Eight providers", "OpenAI, Anthropic, Gemini, Groq, Mistral, Together, DeepSeek, OpenRouter — one endpoint, one key."],
   ["[->]", "Drop-in compatible", "OpenAI SDK and Anthropic SDK compatible. Change the baseURL and the key. That is the whole migration."],
@@ -16,13 +16,10 @@ const FAQ = [
   ["Do you store my prompts?", "No. Requests and responses stream through the gateway and are not persisted. We keep aggregate counters (request counts per day) so you can see usage — never content."],
   ["What happens when a provider goes down?", "If your model is \"auto\", the gateway retries the next provider in your fallback chain on 429s, 5xx errors and timeouts — up to 3 hops. You get a x-gateway-fallback-count header telling you it happened."],
   ["Does streaming work?", "Yes. SSE streaming passes straight through, including for Anthropic models (translated to OpenAI chunk format on the fly)."],
-  ["What does it cost?", "The gateway is free. You pay your providers directly with your own keys — we never touch your billing."],
+  ["Is it free — and who pays?", "The gateway is free to use. You bring your own provider API keys (BYOK) and pay your providers directly — we never touch your billing. GatewayforAI is built and operated by an independent developer; BYOK keeps operating costs near zero, so there is nothing to charge you. The entire codebase is open source (MIT) on GitHub. Self-host it and it is free in every sense: your infrastructure, your keys, your data."],
   ["I lost my gateway key.", "Keys cannot be recovered (we only store a hash). Create a new config at /start — it takes 30 seconds."],
   ["What happens if someone steals my gateway key?", "They can make requests through your configured providers (spending your provider credits) until you act — they can never read your raw provider keys, which are encrypted and never returned by any endpoint. Rotate or delete the config at /manage the moment you suspect a leak."],
-  ["Will it stay free?", "The gateway is open source (MIT) and the hosted instance is free. BYOK keeps our operating costs near zero, so there is nothing to bill. Self-host it and it is free in every sense."],
   ["Does fallback work mid-stream?", "Fallback triggers on errors and timeouts before the first token — a provider that accepts the request but never produces output (a stream that dies at birth) fails over to the next provider automatically. Once output starts, the stream is committed and passes through; a connection that dies mid-stream is not retried (yet)."],
-  ["Who runs this — and why is it free?", "GatewayforAI is built and operated by an independent developer — no VC, no acquisition exit to worry about. It stays free during beta because BYOK keeps our costs near zero: you bring the provider keys, we only route requests. The entire codebase is open source on GitHub, and /api/health is public if you want to wire up your own uptime monitoring."],
-  ["Is it really free?", "Yes. The gateway is open source (MIT) and the hosted instance is free — you bring your own provider keys (BYOK), so there's nothing for us to bill. Self-host it and it's free in every sense: your infrastructure, your keys, your data."],
   ["Can I self-host it?", "Absolutely — that's the point. One-click deploy to Vercel plus a free Upstash Redis database and you have your own private gateway. The hosted instance runs the exact same open-source code. See the README on GitHub for the deploy button and setup."],
 ] as const;
 

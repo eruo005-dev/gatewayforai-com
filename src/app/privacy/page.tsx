@@ -2,6 +2,20 @@ import Link from "next/link";
 
 export const metadata = { title: "Privacy — GatewayforAI" };
 
+function LegalFooter() {
+  return (
+    <footer style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid var(--line)", fontSize: 13, color: "var(--muted)" }}>
+      <Link href="/" style={{ color: "var(--muted)" }}>Home</Link>
+      {" · "}
+      <Link href="/privacy" style={{ color: "var(--muted)" }}>Privacy</Link>
+      {" · "}
+      <Link href="/terms" style={{ color: "var(--muted)" }}>Terms</Link>
+      {" · "}
+      <a href="https://github.com/eruo005-dev/gatewayforai-com" target="_blank" rel="noopener noreferrer" style={{ color: "var(--muted)" }}>GitHub</a>
+    </footer>
+  );
+}
+
 export default function Privacy() {
   return (
     <main className="container" style={{ maxWidth: 720, padding: "48px 24px" }}>
@@ -40,6 +54,7 @@ export default function Privacy() {
         Hosting: Vercel. Storage: Upstash (Redis). Your traffic additionally reaches the LLM
         providers you configured, under their terms.
       </p>
+      <LegalFooter />
     </main>
   );
 }
