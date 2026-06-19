@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { FakeRedis } from "./fake-redis";
-import { setRedisForTests, createConfig, createSubKey } from "@/lib/config-store";
+import { setRedisForTests, createConfig, createSubKey, resolveGatewayAuth } from "@/lib/config-store";
+import { sha256 } from "@/lib/crypto";
 
 /**
  * Route-handler integration tests.
@@ -39,10 +40,12 @@ vi.mock("@/lib/ratelimit", () => ({
 // Import route handlers AFTER the mock is declared (vi.mock is hoisted, so order
 // is cosmetic, but keep it explicit).
 import { POST as subkeysPOST, GET as subkeysGET, DELETE as subkeysDELETE } from "@/app/api/config/subkeys/route";
-import { GET as configGET } from "@/app/api/config/route";
+import { GET as configGET, POST as configPOST } from "@/app/api/config/route";
 import { POST as chatPOST } from "@/app/v1/chat/completions/route";
 import { POST as messagesPOST } from "@/app/v1/messages/route";
 import { POST as embeddingsPOST } from "@/app/v1/embeddings/route";
+import { GET as modelsGET } from "@/app/v1/models/route";
+import { GET as healthGET } from "@/app/api/health/route";
 
 const PARENT_KEY = "gw_live_routetest";
 const INPUT = {
@@ -133,6 +136,33 @@ describe("POST /api/config/subkeys — sub-key privilege boundary", () => {
     );
     expect(res.status).toBe(401);
   });
+
+  it("DELETE unknown id → 404; valid id → revoked (auth null after) (MEDIUM 15)", async () => {
+    // Unknown id: no match in the parent index → 404.
+    const miss = await subkeysDELETE(
+      req("http://t/api/config/subkeys", {
+        method: "DELETE",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ id: "ffffffff" }),
+      }),
+    );
+    expect(miss.status).toBe(404);
+
+    // Valid id: revoke the sub-key minted in beforeEach. Its id is the first 8
+    // hex chars of sha256(subKey). After revoke, resolveGatewayAuth(subKey)
+    // must return null (record deleted + removed from parent index).
+    const id = sha256(subKey).slice(0, 8);
+    expect(await resolveGatewayAuth(subKey)).not.toBeNull();
+    const hit = await subkeysDELETE(
+      req("http://t/api/config/subkeys", {
+        method: "DELETE",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ id }),
+      }),
+    );
+    expect(hit.status).toBe(200);
+    expect(await resolveGatewayAuth(subKey)).toBeNull();
+  });
 });
 
 describe("GET /api/config — sub-key cannot read config", () => {
@@ -209,6 +239,104 @@ describe("POST /v1/chat/completions", () => {
     expect(res.headers.get("x-gateway-provider")).toBe("openai");
   });
 
+  it("success response sets provider/fallback-count/latency headers (CRITICAL 1)", async () => {
+    // Pins ALL three gateway headers on the 200 path. Kills a mutation that
+    // deletes the headers.set("x-gateway-fallback-count"/"x-gateway-latency-ms")
+    // lines (the bare provider assertion above wouldn't catch those).
+    const openaiJson = {
+      id: "chatcmpl-1",
+      model: "gpt-4o",
+      choices: [{ message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+      usage: { total_tokens: 5 },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify(openaiJson), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const res = await chatPOST(
+      req("http://t/v1/chat/completions", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/gpt-4o", messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
+    expect(res.headers.get("x-gateway-fallback-count")).toBe("0");
+    expect(Number(res.headers.get("x-gateway-latency-ms"))).toBeGreaterThanOrEqual(0);
+  });
+
+  it("returns 429 with /token/i + retry-after when the TPM limiter fails (CRITICAL 2)", async () => {
+    // PARENT_KEY's config has tpm: 50_000 (see INPUT), so the route consults
+    // checkTokenLimit. Force it to deny → must 429 with a token-shaped error.
+    // Kills a mutation that removes the `if (limits.tpm) checkTokenLimit` gate
+    // (the request would then reach the stubbed-fetch 200 instead).
+    rlState.token = { success: false, reset: Date.now() + 30_000 };
+    // Fetch must NOT be reached; if the gate is removed it would be — stub a 200
+    // so a broken gate fails LOUDLY here (we assert 429, not 200).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ id: "x", model: "gpt-4o", choices: [], usage: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const res = await chatPOST(
+      req("http://t/v1/chat/completions", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/gpt-4o", messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBeTruthy();
+    const body = await res.json();
+    expect(body.error.code).toMatch(/token/i);
+  });
+
+  it("cache hit: second identical request returns x-gateway-cache: hit, fetch once (MEDIUM 14)", async () => {
+    const openaiJson = {
+      id: "chatcmpl-cache",
+      model: "gpt-4o",
+      choices: [{ message: { role: "assistant", content: "cached" }, finish_reason: "stop" }],
+      usage: { total_tokens: 7 },
+    };
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(openaiJson), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const make = () =>
+      chatPOST(
+        req("http://t/v1/chat/completions", {
+          method: "POST",
+          bearer: PARENT_KEY,
+          headers: { "x-gateway-cache": "60" },
+          body: JSON.stringify({ model: "openai/gpt-4o", messages: [{ role: "user", content: "cache me" }] }),
+        }),
+      );
+    const first = await make();
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-gateway-cache")).toBe("miss");
+    const firstBody = await first.text();
+
+    const second = await make();
+    expect(second.status).toBe(200);
+    expect(second.headers.get("x-gateway-cache")).toBe("hit");
+    expect(await second.text()).toBe(firstBody);
+    // Upstream hit exactly once — the second request was served from cache.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 429 (before auth) when the per-IP gateway limiter fails (FIX 1)", async () => {
     // The per-IP gate runs BEFORE auth. With NO bearer at all, a tripped IP
     // limit must still 429 — proving the IP check short-circuits ahead of the
@@ -259,6 +387,72 @@ describe("POST /v1/messages — Anthropic error shape", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBeTruthy();
     expectAnthropicError(await res.json());
+  });
+
+  // Stub fetch → a 200 OpenAI chat-completion that the route translates to an
+  // Anthropic Messages response.
+  function stubOpenAi200() {
+    const openaiJson = {
+      id: "chatcmpl-msg",
+      model: "gpt-4o",
+      choices: [{ message: { role: "assistant", content: "hello there" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify(openaiJson), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+  }
+
+  it("happy path: 200 Anthropic message body + gateway headers (CRITICAL 4)", async () => {
+    // Kills translation/path regressions: a broken fromAnthropicRequest →
+    // toAnthropicResponse pipeline or a dropped gateway-header block would fail
+    // one of these assertions.
+    stubOpenAi200();
+    const res = await messagesPOST(
+      req("http://t/v1/messages", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({
+          model: "openai/gpt-4o",
+          max_tokens: 64,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
+    expect(res.headers.get("x-gateway-fallback-count")).toBe("0");
+    expect(Number(res.headers.get("x-gateway-latency-ms"))).toBeGreaterThanOrEqual(0);
+    const body = await res.json();
+    expect(body.type).toBe("message");
+    expect(body.content[0].type).toBe("text");
+    expect(typeof body.usage.input_tokens).toBe("number");
+  });
+
+  it("authenticates via x-api-key header (no Authorization) (CRITICAL 5)", async () => {
+    // Send the key ONLY via x-api-key. Kills a mutation that swaps the
+    // x-api-key / Authorization precedence (or drops x-api-key support) — the
+    // route would then 401 instead of 200.
+    stubOpenAi200();
+    const res = await messagesPOST(
+      new Request("http://t/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": PARENT_KEY, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai/gpt-4o",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
   });
 
   it("invalid bearer → 401 in Anthropic shape (not OpenAI)", async () => {
@@ -344,5 +538,118 @@ describe("POST /v1/embeddings — validation", () => {
       }),
     );
     expect(res.status).toBe(400);
+  });
+
+  it("happy path: 200 + x-gateway-provider for a valid embeddings request (MEDIUM 13)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ object: "list", data: [{ embedding: [0.1, 0.2] }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const res = await embeddingsPOST(
+      req("http://t/v1/embeddings", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: "hi" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
+  });
+});
+
+// ─── /v1/models: authed listing (HIGH 7) ────────────────────────────────────
+describe("GET /v1/models", () => {
+  it("authed success: lists provider/model entries as OpenAI 'list' shape", async () => {
+    // Stub the per-provider /models fetch. Asserts the route prefixes the model
+    // id with provider/ and wraps the result in the OpenAI list envelope.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: "gpt-4o" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const res = await modelsGET(req("http://t/v1/models", { bearer: PARENT_KEY }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.object).toBe("list");
+    const entry = body.data.find((m: any) => m.id === "openai/gpt-4o");
+    expect(entry).toBeDefined();
+    expect(entry.object).toBe("model");
+  });
+
+  it("rejects a bad gw key with 401", async () => {
+    const res = await modelsGET(req("http://t/v1/models", { bearer: "gw_live_unknown" }));
+    expect(res.status).toBe(401);
+  });
+
+  it("per-IP limit trip → 429 before auth", async () => {
+    rlState.gwIp = { success: false, reset: Date.now() + 30_000 };
+    const res = await modelsGET(req("http://t/v1/models", { bearer: "garbage" }));
+    expect(res.status).toBe(429);
+  });
+});
+
+// ─── POST /api/config: create config (HIGH 9) ───────────────────────────────
+describe("POST /api/config — create", () => {
+  const VALID_BODY = {
+    providers: { openai: "sk-openai-fake-key-1234567890" },
+    fallbackChain: [{ provider: "openai", model: "gpt-4o" }],
+    rateLimit: { rpm: 60 },
+  };
+
+  it("create returns 201 with a gw_live_ gateway key", async () => {
+    const res = await configPOST(
+      req("http://t/api/config", { method: "POST", body: JSON.stringify(VALID_BODY) }),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.gatewayKey).toMatch(/^gw_live_/);
+  });
+
+  it("invalid body (no providers) → 400", async () => {
+    const res = await configPOST(
+      req("http://t/api/config", {
+        method: "POST",
+        body: JSON.stringify({ fallbackChain: [{ provider: "openai", model: "gpt-4o" }], rateLimit: { rpm: 60 } }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("ipGate forced fail → 429", async () => {
+    rlState.ip = { success: false, reset: Date.now() + 30_000 };
+    const res = await configPOST(
+      req("http://t/api/config", { method: "POST", body: JSON.stringify(VALID_BODY) }),
+    );
+    expect(res.status).toBe(429);
+  });
+});
+
+// ─── GET /api/health: ok + 503 (HIGH 8) ─────────────────────────────────────
+describe("GET /api/health", () => {
+  it("normal → 200 { ok:true, redis:true }", async () => {
+    const res = await healthGET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.redis).toBe(true);
+  });
+
+  it("redis set/get throws → 503 { ok:false }", async () => {
+    redis.set = (async () => {
+      throw new Error("redis down");
+    }) as never;
+    const res = await healthGET();
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
   });
 });

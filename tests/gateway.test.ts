@@ -159,6 +159,32 @@ describe("routeRequest", () => {
     expect(fetchFn).toHaveBeenCalledTimes(4);
   });
 
+  it("MAX_ATTEMPTS=4 cap is pinned: 5-entry all-500 → 502 with 4 attempts (HIGH 10)", async () => {
+    // Belt-and-suspenders on the cap: asserts BOTH that fetch fired exactly 4
+    // times AND that the 502 body reports exactly 4 attempts. Kills a mutation
+    // that changes the cap to 5 (or removes it) — the chain would then exhaust
+    // all 5 entries.
+    const longChain: ChainEntry[] = [
+      { provider: "openai", model: "a" },
+      { provider: "groq", model: "b" },
+      { provider: "gemini", model: "c" },
+      { provider: "mistral", model: "d" },
+      { provider: "deepseek", model: "e" },
+    ];
+    const keys = { openai: "1", groq: "2", gemini: "3", mistral: "4", deepseek: "5" };
+    const fetchFn = vi.fn(async () => Response.json({ e: 1 }, { status: 500 }));
+    const r = await routeRequest({
+      body,
+      chain: longChain,
+      keys,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(4);
+    expect(r.response.status).toBe(502);
+    const json = await r.response.json();
+    expect(json.error.attempts).toHaveLength(4);
+  });
+
   // --- Circuit breaker tests ---
 
   function fakeBreaker(open: string[] = []) {

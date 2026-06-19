@@ -77,6 +77,18 @@ describe("config-store", () => {
     expect(await rotateKey("gw_live_nope")).toBeNull();
   });
 
+  it("rotateKey deletes the old key in the SAME redis instance (CRITICAL 6)", async () => {
+    // Pins that rotateKey DELETES the old record, not just writes the new one.
+    // Kills a mutation that removes the `redis().del(configKey(sha256(oldKey)))`
+    // line: getConfig(oldKey) would then still resolve the stale record.
+    await createConfig("gw_live_rot_old", INPUT);
+    const newKey = await rotateKey("gw_live_rot_old");
+    expect(newKey).toMatch(/^gw_live_/);
+    // No beforeEach reset between these — same FakeRedis instance throughout.
+    expect(await getConfig("gw_live_rot_old")).toBeNull();
+    expect((await getConfig(newKey!))?.providers.openai).toBe("sk-openai-123");
+  });
+
   it("getConfig throws /corrupt/ when stored ciphertext is corrupted", async () => {
     await createConfig("gw_live_test1", INPUT);
     // Find the stored key in FakeRedis, parse the JSON, corrupt one provider's ciphertext.

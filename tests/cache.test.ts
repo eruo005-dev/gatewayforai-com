@@ -64,6 +64,15 @@ describe("cacheKeyFor", () => {
     const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, seed: 2 });
     expect(k1).not.toBe(k2);
   });
+
+  it("differs by model → different cache key (HIGH 12)", () => {
+    // Two bodies identical except `model`. Kills a mutation that drops "model"
+    // from CACHE_FIELDS — both would then hash to the same key and a gpt-4o
+    // request could be served a gpt-4o-mini cached response.
+    const k1 = cacheKeyFor(KEY_HASH, { ...BODY_A, model: "openai/gpt-4o" });
+    const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, model: "openai/gpt-4o-mini" });
+    expect(k1).not.toBe(k2);
+  });
 });
 
 describe("getCached / setCached round-trip", () => {

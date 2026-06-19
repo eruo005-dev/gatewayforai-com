@@ -69,6 +69,15 @@ describe("crypto", () => {
     expect(() => decrypt("AAAA")).toThrow("ciphertext too short");
   });
 
+  it("rejects IV tamper (byte 0 flipped) (MEDIUM 16)", () => {
+    // Byte 0 is within the 12-byte IV prefix. Flipping it changes the GCM
+    // keystream so the auth tag no longer verifies → decrypt must throw.
+    const ct = encrypt("secret");
+    const buf = Buffer.from(ct, "base64");
+    buf[0] ^= 0xff;
+    expect(() => decrypt(buf.toString("base64"))).toThrow();
+  });
+
   it("encrypted blob is long enough to contain IV(12) + tag(16) + ciphertext", () => {
     // base64-decoded length must exceed 28 (IV 12 + tag 16) for a non-empty
     // plaintext. Pins that both the IV and the GCM auth tag are present in the
