@@ -4,7 +4,7 @@
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/eruo005-dev/gatewayforai-com/actions/workflows/ci.yml/badge.svg)](https://github.com/eruo005-dev/gatewayforai-com/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-208%20passing-brightgreen.svg)](#development)
+[![tests](https://img.shields.io/badge/tests-339%20passing-brightgreen.svg)](#development)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Made with Next.js](https://img.shields.io/badge/made%20with-Next.js-black.svg)](https://nextjs.org)
 
