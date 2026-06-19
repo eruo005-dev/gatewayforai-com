@@ -1,7 +1,8 @@
 import { after } from "next/server";
 import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
-import { errJson, gatewayHeaders, redactKeys } from "@/lib/errors";
+import { errJson, gatewayHeaders } from "@/lib/errors";
+import { bearerKey, redactedErrorResponse } from "@/lib/http";
 import { PROVIDERS } from "@/lib/providers/registry";
 import { checkGatewayIpLimit, checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
 import type { ProviderId } from "@/lib/types";
@@ -9,10 +10,6 @@ import { recordUsage } from "@/lib/usage";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-function bearerKey(req: Request): string {
-  return (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-}
 
 export async function POST(req: Request) {
   // Per-IP economic-DoS backstop — BEFORE auth (see chat/completions route).
@@ -101,6 +98,11 @@ export async function POST(req: Request) {
   const upstreamBody = { ...body, model: bareModel };
   const upstreamUrl = `${providerDef.baseURL}/embeddings`;
 
+  // INTENTIONAL: this route calls `fetch` directly and does NOT go through the
+  // breaker/fallback engine (routeRequest). Embeddings have no fallback semantics —
+  // the caller pins an explicit provider/model (no "auto"), so there is nothing to
+  // fail over TO, and a per-config circuit breaker would add no value for a single
+  // pinned upstream. This is a deliberate design choice, not an oversight.
   let response: Response;
   try {
     response = await fetch(upstreamUrl, {
@@ -134,20 +136,9 @@ export async function POST(req: Request) {
   // Error path: redact any provider-key fingerprint the upstream echoed into its
   // error body before surfacing it to the gw-key holder. This route did NO
   // redaction before (HIGH-2). The X-Error-Json header is already dropped by the
-  // whitelist above; here we also scrub the body.
+  // whitelist above; redactedErrorResponse also scrubs the body (shared helper).
   if (!response.ok) {
-    const text = await response.text();
-    let outBody = text;
-    try {
-      const parsed = JSON.parse(text);
-      if (typeof parsed?.error?.message === "string") {
-        parsed.error.message = redactKeys(parsed.error.message);
-        outBody = JSON.stringify(parsed);
-      }
-    } catch {
-      outBody = redactKeys(text);
-    }
-    return new Response(outBody, { status: response.status, headers });
+    return redactedErrorResponse(response, headers);
   }
 
   return new Response(response.body, { status: response.status, headers });

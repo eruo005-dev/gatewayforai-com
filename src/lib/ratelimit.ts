@@ -75,15 +75,25 @@ export async function checkTokenLimit(
   tpm: number,
   nowMs = Date.now(),
 ): Promise<LimitResult> {
-  const r = redis();
   const cur = epochMinute(nowMs);
-  const [curVal, prevVal] = await Promise.all([
-    r.get<string | number>(`tok:${keyHash}:${cur}`),
-    r.get<string | number>(`tok:${keyHash}:${cur - 1}`),
-  ]);
-  const spent = Number(curVal ?? 0) + Number(prevVal ?? 0);
   const reset = (cur + 1) * 60_000; // start of next minute
-  return { success: spent < tpm, reset };
+  // Fail OPEN on a Redis brownout, consistent with the other limiters: a slow
+  // Redis must not hang the hot path waiting on the two token-bucket GETs. If the
+  // reads don't return within LIMITER_TIMEOUT_MS we treat the request as under
+  // limit (auth already fails CLOSED, so access stays gated).
+  return withTimeout(
+    (async () => {
+      const r = redis();
+      const [curVal, prevVal] = await Promise.all([
+        r.get<string | number>(`tok:${keyHash}:${cur}`),
+        r.get<string | number>(`tok:${keyHash}:${cur - 1}`),
+      ]);
+      const spent = Number(curVal ?? 0) + Number(prevVal ?? 0);
+      return { success: spent < tpm, reset };
+    })(),
+    LIMITER_TIMEOUT_MS,
+    () => ({ success: true, reset }), // fail open
+  );
 }
 
 /**
@@ -105,13 +115,43 @@ export async function recordTokens(
   await incrByWithExpire(key, tokens, 180);
 }
 
+// ─── Module-scoped limiter singletons ────────────────────────────────────────
+//
+// Each Ratelimit is stateless over redis() (state lives in Redis), so there's no
+// reason to reconstruct one PER REQUEST — that allocated a fresh object on every
+// hot-path call. We build each lazily ONCE and reuse it; the per-key/per-IP
+// identity is still passed at call time via `.limit(key)`.
+//
+// The IP limiters have a fixed window so a plain singleton suffices. The RPM
+// limiter's window depends on `rpm`, which varies per key, so we memoize one
+// instance PER distinct rpm value (a tiny, bounded set of configured limits).
+let _gwIpLimiter: Ratelimit | null = null;
+let _ipLimiter: Ratelimit | null = null;
+const _rpmLimiters = new Map<number, Ratelimit>();
+
+function rpmLimiter(rpm: number): Ratelimit {
+  let rl = _rpmLimiters.get(rpm);
+  if (!rl) {
+    rl = new Ratelimit({
+      redis: redis(),
+      limiter: Ratelimit.slidingWindow(rpm, "60 s"),
+      prefix: "rl",
+    });
+    _rpmLimiters.set(rpm, rl);
+  }
+  return rl;
+}
+
+/** Test-only: drop the cached limiter singletons (e.g. after swapping redis()). */
+export function _resetLimiters(): void {
+  _gwIpLimiter = null;
+  _ipLimiter = null;
+  _rpmLimiters.clear();
+}
+
 /** Per-gateway-key RPM limit (sliding window). Fails OPEN on Redis timeout. */
 export async function checkRateLimit(keyHash: string, rpm: number): Promise<LimitResult> {
-  const rl = new Ratelimit({
-    redis: redis(),
-    limiter: Ratelimit.slidingWindow(rpm, "60 s"),
-    prefix: "rl",
-  });
+  const rl = rpmLimiter(rpm);
   return withTimeout(
     rl.limit(keyHash).then(({ success, reset }) => ({ success, reset })),
     LIMITER_TIMEOUT_MS,
@@ -126,11 +166,11 @@ export async function checkRateLimit(keyHash: string, rpm: number): Promise<Limi
  * Fails OPEN on Redis timeout.
  */
 export async function checkGatewayIpLimit(ip: string): Promise<LimitResult> {
-  const rl = new Ratelimit({
+  const rl = (_gwIpLimiter ??= new Ratelimit({
     redis: redis(),
     limiter: Ratelimit.slidingWindow(120, "60 s"),
     prefix: "rlgw",
-  });
+  }));
   return withTimeout(
     rl.limit(ip).then(({ success, reset }) => ({ success, reset })),
     LIMITER_TIMEOUT_MS,
@@ -143,11 +183,11 @@ export async function checkGatewayIpLimit(ip: string): Promise<LimitResult> {
 
 /** Per-IP limit for config endpoints (anti key-spam / brute force). Fails OPEN. */
 export async function checkIpLimit(ip: string): Promise<LimitResult> {
-  const rl = new Ratelimit({
+  const rl = (_ipLimiter ??= new Ratelimit({
     redis: redis(),
     limiter: Ratelimit.slidingWindow(20, "60 s"),
     prefix: "rlip",
-  });
+  }));
   return withTimeout(
     rl.limit(ip).then(({ success, reset }) => ({ success, reset })),
     LIMITER_TIMEOUT_MS,

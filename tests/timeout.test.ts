@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setRedisForTests, resolveGatewayAuth, withTimeout, REDIS_TIMEOUT_MS } from "@/lib/config-store";
-import { checkRateLimit, checkGatewayIpLimit, checkIpLimit, _resetMemFallback } from "@/lib/ratelimit";
+import { checkRateLimit, checkTokenLimit, checkGatewayIpLimit, checkIpLimit, _resetMemFallback, _resetLimiters } from "@/lib/ratelimit";
 
 /**
  * Redis timeout + degradation policy (FIX 3).
@@ -27,9 +27,13 @@ function hangingRedis() {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // Limiters are now module-scoped singletons memoized over redis(); drop them so
+  // each test rebinds to the redis it just injected (e.g. the hanging stand-in).
+  _resetLimiters();
 });
 afterEach(() => {
   vi.useRealTimers();
+  _resetLimiters();
 });
 
 describe("withTimeout", () => {
@@ -77,6 +81,21 @@ describe("checkRateLimit — RATE LIMIT fails OPEN on Redis timeout", () => {
     await vi.advanceTimersByTimeAsync(1600);
     const result = await promise;
     expect(result.success).toBe(true);
+  });
+});
+
+describe("checkTokenLimit — TOKEN LIMIT fails OPEN on Redis timeout", () => {
+  it("returns success=true when the token-bucket GETs hang", async () => {
+    // A Redis brownout must not hang the hot path on the two token GETs. The op
+    // is wrapped in withTimeout (1500ms budget) and falls OPEN (success=true),
+    // consistent with the RPM/IP limiters.
+    setRedisForTests(hangingRedis());
+    const promise = checkTokenLimit("hash1", 1000);
+    await vi.advanceTimersByTimeAsync(1600);
+    const result = await promise;
+    expect(result.success).toBe(true);
+    // Fallback still reports a sane next-minute reset.
+    expect(result.reset).toBeGreaterThan(0);
   });
 });
 
