@@ -6,13 +6,19 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege: CI only needs to read the repo. No write token is exposed,
+# so a malicious fork PR has nothing to steal.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      # Actions pinned to full commit SHAs (supply-chain hardening) — a moved tag
+      # can't swap the action out from under us. Comments record the human version.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
