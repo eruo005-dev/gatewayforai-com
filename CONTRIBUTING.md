@@ -32,7 +32,7 @@ npm run dev          # http://localhost:3000
 ## Running tests
 
 ```bash
-npm test             # vitest — runs the full suite (371 tests as of v1.0.0)
+npm test             # vitest — runs the full suite (373 tests as of v1.0.0)
 npm run build        # next build — typecheck + production build
 ```
 
