@@ -1,9 +1,10 @@
 import { after } from "next/server";
 import { fromAnthropicRequest, toAnthropicResponse, toAnthropicSSE } from "@/lib/anthropic-inbound";
 import { redisBreaker } from "@/lib/breaker";
+import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
 import { resolveChain, routeRequest } from "@/lib/gateway";
-import { checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
+import { checkGatewayIpLimit, checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
 import { sortChain } from "@/lib/routing";
 import type { RouteStrategy } from "@/lib/routing";
 import { recordUsage } from "@/lib/usage";
@@ -34,6 +35,15 @@ function gatewayKey(req: Request): string {
 }
 
 export async function POST(req: Request) {
+  // Per-IP economic-DoS backstop — BEFORE auth so a flood of bogus keys is
+  // throttled by IP before any Redis auth lookup runs. Anthropic error shape.
+  const ipLimit = await checkGatewayIpLimit(clientIp(req));
+  if (!ipLimit.success) {
+    return anthErr(429, "Too many requests from this IP.", {
+      "retry-after": retryAfterSeconds(ipLimit.reset),
+    });
+  }
+
   const gwKey = gatewayKey(req);
   if (!gwKey.startsWith("gw_")) {
     return anthErr(401, "Pass your gateway key via x-api-key or Authorization: Bearer gw_live_...");
@@ -112,6 +122,17 @@ export async function POST(req: Request) {
   // Breaker scoped to parentHash: shared provider health per config.
   const breaker = redisBreaker(parentHash);
 
+  // Soft TPM with in-flight reservation (FIX 4): pre-charge the ESTIMATED tokens
+  // synchronously BEFORE dispatch so concurrent requests see the reservation in
+  // checkTokenLimit. We later reconcile against the actual usage:
+  //   - non-streaming success → record (actual − estimate) signed delta
+  //   - failed request        → refund (−estimate), so a failure bills 0
+  //   - streaming success      → keep the estimate (actual is unreadable)
+  // recordTokens accepts negative deltas (INCRBY of a negative is fine).
+  if (limits.tpm) {
+    await recordTokens(keyHash, estimatedTokens);
+  }
+
   // No response-cache support on this route in v1 (x-gateway-cache is not wired).
   const result = await routeRequest({ body: openaiBody, chain, keys: config.providers, breaker });
 
@@ -132,14 +153,16 @@ export async function POST(req: Request) {
 
   // Streaming: translate the OpenAI chunk SSE stream back to Anthropic event SSE.
   if (body.stream) {
-    if (limits.tpm) {
-      after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
-    }
     if (!result.response.ok || !result.response.body) {
-      // Upstream failed before streaming — surface an Anthropic-shaped error.
+      // Upstream failed before streaming — refund the reservation so a failed
+      // request bills 0 (FIX 4), then surface an Anthropic-shaped error.
+      if (limits.tpm) after(() => recordTokens(keyHash, -estimatedTokens).catch(() => {}));
       const { status, message } = await upstreamError(result.response);
       return anthErr(status, message, gwHeaders);
     }
+    // Upstream is OK and streaming — keep the reserved estimate (we can't read
+    // the streamed body to reconcile actual tokens). No extra recording needed;
+    // the reservation already charged estimatedTokens.
     // Guard the stream translation so a translator exception is surfaced as an
     // Anthropic-shaped error rather than a Next.js default 500.
     let anthropicStream: ReadableStream<Uint8Array>;
@@ -164,17 +187,17 @@ export async function POST(req: Request) {
     try {
       parsed = JSON.parse(text);
     } catch {
-      if (limits.tpm) after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+      // Unparseable success body → keep the reserved estimate (we got a 200 but
+      // can't read actual usage; the estimate is our best charge). No reconcile.
       return anthErr(502, "Upstream returned an unparseable response.", gwHeaders);
     }
     if (limits.tpm) {
+      // Reconcile the reservation: record the signed delta (actual − estimate).
+      // If actual is unknown, the delta is 0 (estimate already reserved).
       const total = parsed?.usage?.total_tokens;
-      after(() =>
-        recordTokens(
-          keyHash,
-          typeof total === "number" && total > 0 ? total : estimatedTokens,
-        ).catch(() => {}),
-      );
+      const actual = typeof total === "number" && total > 0 ? total : estimatedTokens;
+      const delta = actual - estimatedTokens;
+      if (delta !== 0) after(() => recordTokens(keyHash, delta).catch(() => {}));
     }
     // Guard the response translation. toAnthropicResponse is defensive and is
     // not expected to throw (see tests/anthropic-inbound.test.ts), so this is
@@ -188,8 +211,9 @@ export async function POST(req: Request) {
     return Response.json(anthResponse, { headers: gwHeaders });
   }
 
-  // Upstream error — translate to an Anthropic-shaped error with the same status.
-  if (limits.tpm) after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+  // Upstream error — refund the reservation so a failed request bills 0 (FIX 4),
+  // then translate to an Anthropic-shaped error with the same status.
+  if (limits.tpm) after(() => recordTokens(keyHash, -estimatedTokens).catch(() => {}));
   const { status, message } = await upstreamError(result.response);
   return anthErr(status, message, gwHeaders);
 }

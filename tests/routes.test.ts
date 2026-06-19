@@ -22,12 +22,14 @@ import { setRedisForTests, createConfig, createSubKey } from "@/lib/config-store
 const rlState = {
   rpm: { success: true, reset: Date.now() + 60_000 },
   ip: { success: true, reset: Date.now() + 60_000 },
+  gwIp: { success: true, reset: Date.now() + 60_000 },
   token: { success: true, reset: Date.now() + 60_000 },
 };
 
 vi.mock("@/lib/ratelimit", () => ({
   checkRateLimit: vi.fn(async () => rlState.rpm),
   checkIpLimit: vi.fn(async () => rlState.ip),
+  checkGatewayIpLimit: vi.fn(async () => rlState.gwIp),
   checkTokenLimit: vi.fn(async () => rlState.token),
   recordTokens: vi.fn(async () => {}),
   retryAfterSeconds: (reset: number) =>
@@ -56,6 +58,7 @@ beforeEach(async () => {
   // Reset rate-limit gates to "pass" before each test.
   rlState.rpm = { success: true, reset: Date.now() + 60_000 };
   rlState.ip = { success: true, reset: Date.now() + 60_000 };
+  rlState.gwIp = { success: true, reset: Date.now() + 60_000 };
   rlState.token = { success: true, reset: Date.now() + 60_000 };
 
   redis = new FakeRedis();
@@ -206,6 +209,18 @@ describe("POST /v1/chat/completions", () => {
     expect(res.headers.get("x-gateway-provider")).toBe("openai");
   });
 
+  it("returns 429 (before auth) when the per-IP gateway limiter fails (FIX 1)", async () => {
+    // The per-IP gate runs BEFORE auth. With NO bearer at all, a tripped IP
+    // limit must still 429 — proving the IP check short-circuits ahead of the
+    // auth lookup. Deleting the gate would let this reach the 401 auth path.
+    rlState.gwIp = { success: false, reset: Date.now() + 30_000 };
+    const res = await chatPOST(
+      req("http://t/v1/chat/completions", { method: "POST", body: "{}" }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBeTruthy();
+  });
+
   it("returns 429 with retry-after when the RPM limiter fails (mutation 2)", async () => {
     // Force the limiter to deny. The route MUST consult checkRateLimit and
     // short-circuit to 429 — deleting/breaking that call would let the request
@@ -235,6 +250,16 @@ describe("POST /v1/messages — Anthropic error shape", () => {
     expect(typeof body.error.type).toBe("string");
     expect(typeof body.error.message).toBe("string");
   }
+
+  it("per-IP limit trip → 429 in Anthropic shape, before auth (FIX 1)", async () => {
+    rlState.gwIp = { success: false, reset: Date.now() + 30_000 };
+    const res = await messagesPOST(
+      req("http://t/v1/messages", { method: "POST", body: "{}" }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBeTruthy();
+    expectAnthropicError(await res.json());
+  });
 
   it("invalid bearer → 401 in Anthropic shape (not OpenAI)", async () => {
     const res = await messagesPOST(

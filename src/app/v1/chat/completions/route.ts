@@ -1,11 +1,12 @@
 import { after } from "next/server";
 import { redisBreaker } from "@/lib/breaker";
 import { cacheKeyFor, getCached, setCached } from "@/lib/cache";
+import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
 import { errJson } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { estimateCostUsd } from "@/lib/pricing";
-import { checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
+import { checkGatewayIpLimit, checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
 import { sortChain } from "@/lib/routing";
 import type { RouteStrategy } from "@/lib/routing";
 import { recordUsage } from "@/lib/usage";
@@ -27,6 +28,15 @@ function parseCacheTtl(req: Request): number | null {
 }
 
 export async function POST(req: Request) {
+  // Per-IP economic-DoS backstop — BEFORE auth so a flood of bogus keys is
+  // throttled by IP before any Redis auth lookup runs.
+  const ipLimit = await checkGatewayIpLimit(clientIp(req));
+  if (!ipLimit.success) {
+    return errJson(429, "rate_limit_exceeded", "Too many requests from this IP.", undefined, {
+      "retry-after": retryAfterSeconds(ipLimit.reset),
+    });
+  }
+
   const gwKey = bearerKey(req);
   if (!gwKey.startsWith("gw_")) {
     return errJson(401, "invalid_api_key", "Pass your gateway key as: Authorization: Bearer gw_live_...");
@@ -142,7 +152,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // Cache miss — run the request, read body text, cache async
+    // Cache miss — reserve the estimate (soft TPM with in-flight reservation,
+    // FIX 4) so concurrent requests see it, then run the request and reconcile.
+    if (limits.tpm) await recordTokens(keyHash, estimatedTokens);
     const result = await routeRequest({ body, chain, keys: config.providers, breaker });
 
     after(() =>
@@ -179,35 +191,35 @@ export async function POST(req: Request) {
           const cost = estimateCostUsd(providerModel, parsed.usage);
           if (cost !== null) headers.set("x-gateway-cost-estimate-usd", String(cost));
         }
-        // Record actual token usage when available — per keyHash (sub-key budget)
+        // Reconcile the reservation with actual usage — record the signed delta
+        // (actual − estimate) per keyHash (sub-key budget).
         if (limits.tpm) {
           const total = parsed?.usage?.total_tokens;
-          after(() =>
-            recordTokens(
-              keyHash,
-              typeof total === "number" && total > 0 ? total : estimatedTokens,
-            ).catch(() => {}),
-          );
+          const actual = typeof total === "number" && total > 0 ? total : estimatedTokens;
+          const delta = actual - estimatedTokens;
+          if (delta !== 0) after(() => recordTokens(keyHash, delta).catch(() => {}));
         }
       } catch {
-        // ignore parse errors — cost header is best-effort
-        if (limits.tpm) {
-          after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
-        }
+        // ignore parse errors — cost header is best-effort. Reservation stands
+        // (we got a 200 but couldn't read usage); no reconcile.
       }
       return new Response(text, { status: result.response.status, headers });
     }
 
-    // Non-JSON or error response: pass through without caching
-    // Use conservative estimate since we can't read the body
-    if (limits.tpm) {
-      after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+    // Non-JSON or error response: pass through without caching. A non-ok upstream
+    // is a FAILED request → refund the reservation so it bills 0 (FIX 4). A
+    // non-JSON OK response keeps the reserved estimate (actual is unreadable).
+    if (limits.tpm && !result.response.ok) {
+      after(() => recordTokens(keyHash, -estimatedTokens).catch(() => {}));
     }
     return new Response(result.response.body, { status: result.response.status, headers });
   }
 
-  // No caching — original pass-through path (streaming safe)
-  // Use conservative estimate — body is not read here (would break streaming)
+  // No caching — original pass-through path (streaming safe).
+  // Reserve the estimate before dispatch (soft TPM with in-flight reservation,
+  // FIX 4). On streaming we can't read the body to reconcile, so the estimate is
+  // the final charge on success; on a failed upstream we refund it below.
+  if (limits.tpm) await recordTokens(keyHash, estimatedTokens);
   const result = await routeRequest({ body, chain, keys: config.providers, breaker });
 
   after(() =>
@@ -218,9 +230,10 @@ export async function POST(req: Request) {
     }).catch(() => {}),
   );
 
-  // Conservative token approximation: messages JSON bytes / 4 (documents streaming limitation)
-  if (limits.tpm) {
-    after(() => recordTokens(keyHash, estimatedTokens).catch(() => {}));
+  // Refund the reservation for a FAILED request so it bills 0 (FIX 4). A
+  // successful (streaming) response keeps the reserved estimate.
+  if (limits.tpm && !result.response.ok) {
+    after(() => recordTokens(keyHash, -estimatedTokens).catch(() => {}));
   }
 
   const headers = new Headers(result.response.headers);

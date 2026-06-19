@@ -1,8 +1,9 @@
 import { after } from "next/server";
+import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
 import { errJson } from "@/lib/errors";
 import { PROVIDERS } from "@/lib/providers/registry";
-import { checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
+import { checkGatewayIpLimit, checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
 import type { ProviderId } from "@/lib/types";
 import { recordUsage } from "@/lib/usage";
 
@@ -14,6 +15,14 @@ function bearerKey(req: Request): string {
 }
 
 export async function POST(req: Request) {
+  // Per-IP economic-DoS backstop — BEFORE auth (see chat/completions route).
+  const ipLimit = await checkGatewayIpLimit(clientIp(req));
+  if (!ipLimit.success) {
+    return errJson(429, "rate_limit_exceeded", "Too many requests from this IP.", undefined, {
+      "retry-after": retryAfterSeconds(ipLimit.reset),
+    });
+  }
+
   const gwKey = bearerKey(req);
   if (!gwKey.startsWith("gw_")) {
     return errJson(401, "invalid_api_key", "Pass your gateway key as: Authorization: Bearer gw_live_...");
