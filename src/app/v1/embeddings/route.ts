@@ -4,7 +4,7 @@ import { resolveGatewayAuth } from "@/lib/config-store";
 import { errJson, gatewayHeaders } from "@/lib/errors";
 import { bearerKey, redactedErrorResponse } from "@/lib/http";
 import { PROVIDERS } from "@/lib/providers/registry";
-import { checkGatewayIpLimit, checkRateLimit, retryAfterSeconds } from "@/lib/ratelimit";
+import { checkGatewayIpLimit, checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
 import type { ProviderId } from "@/lib/types";
 import { recordUsage } from "@/lib/usage";
 
@@ -40,6 +40,24 @@ export async function POST(req: Request) {
       undefined,
       { "retry-after": retryAfterSeconds(rl.reset) },
     );
+  }
+
+  // TPM enforcement — embeddings consume input tokens, so a tpm-capped key must
+  // be gated here too (consistency with the chat route). We do NOT reserve/
+  // reconcile: embeddings have no streaming/usage-echo ambiguity worth that
+  // machinery, so a post-hoc estimate record after a 200 is consistent with the
+  // soft-TPM policy (the sliding window self-heals each minute regardless).
+  if (limits.tpm) {
+    const tpmCheck = await checkTokenLimit(keyHash, limits.tpm);
+    if (!tpmCheck.success) {
+      return errJson(
+        429,
+        "token_limit_exceeded",
+        `Token limit of ${limits.tpm} tokens/min exceeded.`,
+        undefined,
+        { "retry-after": retryAfterSeconds(tpmCheck.reset) },
+      );
+    }
   }
 
   let body: Record<string, any>;
@@ -139,6 +157,15 @@ export async function POST(req: Request) {
   // whitelist above; redactedErrorResponse also scrubs the body (shared helper).
   if (!response.ok) {
     return redactedErrorResponse(response, headers);
+  }
+
+  // Record input-token usage post-hoc (only on a 200 — never bill a failed
+  // request). Estimate input tokens as request-body bytes / 4, mirroring the
+  // chat route's conservative estimator. No reserve/reconcile (see TPM comment
+  // above) — a single record after success is consistent with the soft policy.
+  if (limits.tpm) {
+    const est = Math.ceil(JSON.stringify(body.input ?? "").length / 4);
+    after(() => recordTokens(keyHash, est).catch(() => {}));
   }
 
   return new Response(response.body, { status: response.status, headers });

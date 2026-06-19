@@ -682,6 +682,66 @@ describe("POST /v1/embeddings — validation", () => {
     expect(res.headers.get("x-gateway-provider")).toBe("openai");
   });
 
+  it("returns 429 with /token/i + retry-after when the TPM limiter fails (consistency)", async () => {
+    // PARENT_KEY's config has tpm: 50_000 (see INPUT), so the embeddings route
+    // now consults checkTokenLimit after the RPM check. Force it to deny → must
+    // 429 with a token-shaped error. Kills a mutation that removes the
+    // `if (limits.tpm) checkTokenLimit` gate (the request would otherwise reach
+    // the stubbed-fetch 200).
+    rlState.token = { success: false, reset: Date.now() + 30_000 };
+    // Fetch must NOT be reached; stub a 200 so a broken gate fails LOUDLY here.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ object: "list", data: [{ embedding: [0.1] }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const res = await embeddingsPOST(
+      req("http://t/v1/embeddings", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: "hi" }),
+      }),
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBeTruthy();
+    const body = await res.json();
+    expect(body.error.code).toMatch(/token/i);
+  });
+
+  it("TPM-capped success path records token usage and does NOT 500", async () => {
+    // With tpm set and the limiter passing, a 200 upstream must succeed AND the
+    // route must record an input-token estimate post-hoc (never billing a
+    // failed request). Asserts the recordTokens spy was called and the response
+    // is a clean 200 (no 500 from the new accounting path).
+    const recordTokensSpy = ratelimit.recordTokens as unknown as ReturnType<typeof vi.fn>;
+    recordTokensSpy.mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ object: "list", data: [{ embedding: [0.1, 0.2] }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const res = await embeddingsPOST(
+      req("http://t/v1/embeddings", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ model: "openai/text-embedding-3-small", input: "hello world" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-gateway-provider")).toBe("openai");
+    const keyHash = sha256(PARENT_KEY);
+    const est = Math.ceil(JSON.stringify("hello world").length / 4);
+    expect(recordTokensSpy.mock.calls).toContainEqual([keyHash, est]);
+  });
+
   // ─── HIGH-2: embeddings was fully unredacted + copied upstream headers ───────
   it("success path: drops leaky upstream headers (no x-error-json/set-cookie/content-length leak)", async () => {
     vi.stubGlobal(
