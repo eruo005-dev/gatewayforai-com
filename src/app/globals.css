@@ -212,6 +212,13 @@ code, pre, .mono { font-family: var(--mono); }
   outline: none;
 }
 .field input:focus { border-color: var(--accent); }
+
+/* Mobile: stack the fixed-width mono label above a full-width input so password
+   inputs on /start and /manage don't get cramped under the 120px label. */
+@media (max-width: 520px) {
+  .field { flex-direction: column; align-items: stretch; gap: 6px; }
+  .field label { width: auto; }
+}
 .badge { font-family: var(--mono); font-size: 12px; width: 26px; text-align: center; }
 .badge.ok { color: var(--accent); }
 .badge.bad { color: var(--red); }
