@@ -2,7 +2,8 @@
 
 function contentText(c: unknown): string {
   if (typeof c === "string") return c;
-  if (Array.isArray(c)) return c.map((p) => (p as { text?: string }).text ?? "").join("");
+  if (Array.isArray(c))
+    return c.map((p) => (p && typeof p === "object" ? (p as { text?: string }).text ?? "" : "")).join("");
   return "";
 }
 
@@ -29,7 +30,8 @@ type OpenAIToolChoice = string | { type?: string; function?: { name?: string } }
 function mapTools(tools: unknown): Array<Record<string, unknown>> | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
   return (tools as OpenAITool[]).map((t) => {
-    const fn = t.function ?? ({} as NonNullable<OpenAITool["function"]>);
+    // Defensive: a non-object tool entry (null, number, string) must not throw.
+    const fn = (t && typeof t === "object" ? t.function : undefined) ?? ({} as NonNullable<OpenAITool["function"]>);
     return {
       name: fn.name,
       ...(fn.description !== undefined && { description: fn.description }),
@@ -59,16 +61,29 @@ type OAMessage = {
 
 type ContentPart = { type: string; text?: string; cache_control?: unknown };
 
+/** Null-safe projection of one content part into an Anthropic block. */
+function mapPart(p: ContentPart): Record<string, unknown> {
+  if (p == null || typeof p !== "object") return { type: "text", text: "" };
+  return {
+    type: p.type ?? "text",
+    ...(p.text !== undefined && { text: p.text }),
+    ...(p.cache_control !== undefined && { cache_control: p.cache_control }),
+  };
+}
+
 /** Returns true if any element of an array content has a cache_control field. */
 function hasCacheControl(content: unknown): boolean {
   if (!Array.isArray(content)) return false;
-  return (content as ContentPart[]).some((p) => p.cache_control !== undefined);
+  return (content as ContentPart[]).some((p) => p != null && typeof p === "object" && p.cache_control !== undefined);
 }
 
 /** Translate OpenAI messages (excluding system) into Anthropic messages, merging consecutive tool results. */
 function mapMessages(messages: OAMessage[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const m of messages) {
+    // Defensive: a non-object message entry (null, number, string) must not
+    // throw — skip it. The translator never crashes the request on bad input.
+    if (m === null || typeof m !== "object") continue;
     if (m.role === "system") continue;
 
     if (m.role === "tool") {
@@ -97,6 +112,7 @@ function mapMessages(messages: OAMessage[]): Array<Record<string, unknown>> {
       const text = contentText(m.content);
       if (text) blocks.push({ type: "text", text });
       for (const tc of m.tool_calls) {
+        if (tc === null || typeof tc !== "object") continue; // skip malformed entry
         blocks.push({
           type: "tool_use",
           id: tc.id,
@@ -111,11 +127,7 @@ function mapMessages(messages: OAMessage[]): Array<Record<string, unknown>> {
     // Preserve cache_control blocks when present; otherwise flatten to text.
     const contentValue =
       Array.isArray(m.content) && hasCacheControl(m.content)
-        ? (m.content as ContentPart[]).map((p) => ({
-            type: p.type ?? "text",
-            ...(p.text !== undefined && { text: p.text }),
-            ...(p.cache_control !== undefined && { cache_control: p.cache_control }),
-          }))
+        ? (m.content as ContentPart[]).map(mapPart)
         : contentText(m.content);
 
     out.push({
@@ -127,7 +139,10 @@ function mapMessages(messages: OAMessage[]): Array<Record<string, unknown>> {
 }
 
 export function toAnthropicBody(body: Record<string, any>): Record<string, any> {
-  const messages = (body.messages ?? []) as OAMessage[];
+  const rawMessages = (Array.isArray(body.messages) ? body.messages : []) as OAMessage[];
+  // Drop any non-object message entries up front so neither the system filter
+  // nor mapMessages can throw on null/number/string elements.
+  const messages = rawMessages.filter((m) => m !== null && typeof m === "object");
   const systemMessages = messages.filter((m) => m.role === "system");
 
   // If any system message has array content with cache_control, emit as block array.
@@ -136,11 +151,7 @@ export function toAnthropicBody(body: Record<string, any>): Record<string, any> 
   const system = systemHasBlocks
     ? systemMessages.flatMap((m) =>
         Array.isArray(m.content)
-          ? (m.content as ContentPart[]).map((p) => ({
-              type: p.type ?? "text",
-              ...(p.text !== undefined && { text: p.text }),
-              ...(p.cache_control !== undefined && { cache_control: p.cache_control }),
-            }))
+          ? (m.content as ContentPart[]).map(mapPart)
           : [{ type: "text", text: contentText(m.content) }],
       )
     : systemMessages.map((m) => contentText(m.content)).join("\n");

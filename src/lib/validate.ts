@@ -12,7 +12,11 @@ export function validateConfigInput(input: unknown): ValidationResult {
   const providers: Partial<Record<ProviderId, string>> = {};
   const rawProviders = o.providers ?? {};
   for (const [p, k] of Object.entries(rawProviders)) {
-    if (!(p in PROVIDERS)) return { error: `Unknown provider "${p}".` };
+    // Use Object.hasOwn, NOT the `in` operator: `in` walks the prototype chain,
+    // so a key like "__proto__", "constructor", or "toString" (which an attacker
+    // can deliver as a real own-property via JSON.parse) would falsely pass the
+    // registry check. hasOwn only matches the 8 real provider ids.
+    if (!Object.hasOwn(PROVIDERS, p)) return { error: `Unknown provider "${p}".` };
     if (typeof k !== "string" || !k.trim()) return { error: `Empty API key for "${p}".` };
     providers[p as ProviderId] = k.trim();
   }
@@ -26,7 +30,10 @@ export function validateConfigInput(input: unknown): ValidationResult {
   const fallbackChain: ChainEntry[] = [];
   for (const e of rawChain) {
     const provider = e?.provider as ProviderId;
-    if (!(provider in PROVIDERS)) return { error: `Unknown provider "${e?.provider}" in chain.` };
+    // Object.hasOwn (not `in`) — see the provider loop above for the rationale.
+    if (typeof provider !== "string" || !Object.hasOwn(PROVIDERS, provider)) {
+      return { error: `Unknown provider "${e?.provider}" in chain.` };
+    }
     if (!providers[provider]) return { error: `Chain entry "${provider}" has no key configured.` };
     if (typeof e?.model !== "string" || !e.model.trim()) {
       return { error: `Chain entry "${provider}" needs a model name.` };

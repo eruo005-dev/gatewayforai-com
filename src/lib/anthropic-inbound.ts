@@ -10,7 +10,8 @@
 /** Flatten Anthropic content (string OR array of {type,text} blocks) to a plain string. */
 function flattenContent(c: unknown): string {
   if (typeof c === "string") return c;
-  if (Array.isArray(c)) return c.map((p) => (p as { text?: string }).text ?? "").join("");
+  if (Array.isArray(c))
+    return c.map((p) => (p && typeof p === "object" ? (p as { text?: string }).text ?? "" : "")).join("");
   return "";
 }
 
@@ -50,14 +51,18 @@ type AnthToolChoice = { type?: string; name?: string };
 /** Anthropic tools -> OpenAI tools. Returns undefined when absent. */
 function mapTools(tools: unknown): Array<Record<string, unknown>> | undefined {
   if (!Array.isArray(tools) || tools.length === 0) return undefined;
-  return (tools as AnthTool[]).map((t) => ({
-    type: "function",
-    function: {
-      name: t.name,
-      ...(t.description !== undefined && { description: t.description }),
-      parameters: t.input_schema ?? { type: "object", properties: {} },
-    },
-  }));
+  return (tools as AnthTool[]).map((t) => {
+    // Defensive: a non-object tool entry must not throw.
+    const tool = (t && typeof t === "object" ? t : {}) as AnthTool;
+    return {
+      type: "function",
+      function: {
+        name: tool.name,
+        ...(tool.description !== undefined && { description: tool.description }),
+        parameters: tool.input_schema ?? { type: "object", properties: {} },
+      },
+    };
+  });
 }
 
 /** Anthropic tool_choice -> OpenAI tool_choice. Returns undefined when absent. */
@@ -71,6 +76,8 @@ function mapToolChoice(tc: AnthToolChoice | undefined | null): unknown {
 
 /** Translate a single Anthropic message into one or more OpenAI messages. */
 function mapMessage(m: AnthMessage): Array<Record<string, any>> {
+  // Defensive: a non-object message entry (null, number, string) must not throw.
+  if (m === null || typeof m !== "object") return [];
   const content = m.content;
 
   // Plain string content -> pass through unchanged.
@@ -81,7 +88,8 @@ function mapMessage(m: AnthMessage): Array<Record<string, any>> {
     return [{ role: m.role, content: "" }];
   }
 
-  const blocks = content as AnthBlock[];
+  // Drop non-object blocks so every downstream `.type` / `.text` access is safe.
+  const blocks = (content as AnthBlock[]).filter((b) => b !== null && typeof b === "object");
 
   if (m.role === "assistant") {
     const text = blocks
@@ -135,7 +143,8 @@ export function fromAnthropicRequest(body: Record<string, any>): Record<string, 
     messages.push({ role: "system", content: flattenContent(body.system) });
   }
 
-  for (const m of (body.messages ?? []) as AnthMessage[]) {
+  const inMessages = (Array.isArray(body.messages) ? body.messages : []) as AnthMessage[];
+  for (const m of inMessages) {
     messages.push(...mapMessage(m));
   }
 

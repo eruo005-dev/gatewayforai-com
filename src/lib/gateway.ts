@@ -48,7 +48,10 @@ export function resolveChain(
   const slash = model.indexOf("/");
   const provider = (slash === -1 ? model : model.slice(0, slash)) as ProviderId;
   const bare = slash === -1 ? "" : model.slice(slash + 1);
-  if (!PROVIDERS[provider] || !bare) {
+  // Object.hasOwn, not truthiness on PROVIDERS[provider]: PROVIDERS["constructor"]
+  // / ["__proto__"] resolve to inherited Object members (truthy) and would slip a
+  // bogus, non-registry "provider" past this guard. hasOwn matches only the 8 ids.
+  if (!Object.hasOwn(PROVIDERS, provider) || !bare) {
     throw new Error(
       `Unknown provider in model "${model}". Use "provider/model" (e.g. "openai/gpt-4o") or "auto".`,
     );

@@ -66,4 +66,55 @@ describe("clientIp", () => {
     const ip = clientIp(reqWith({ "x-real-ip": "  ", "x-forwarded-for": "5.5.5.5" }));
     expect(ip).toBe("5.5.5.5");
   });
+
+  // ── Class 4: algorithmic-blowup / unbounded-input robustness ───────────────
+  // The XFF parser is split(",")+map(trim)+filter — strictly linear, no regex
+  // backtracking. A pathological 100k-segment header must parse in well under a
+  // second and still return a single well-formed entry (no hang, no crash).
+  it("parses a 100k-segment XFF header quickly (no algorithmic blowup)", () => {
+    const huge = Array.from({ length: 100_000 }, (_, i) => `1.1.1.${i % 256}`).join(",");
+    const t0 = Date.now();
+    const ip = clientIp(reqWith({ "x-forwarded-for": huge }));
+    const elapsed = Date.now() - t0;
+    expect(typeof ip).toBe("string");
+    expect(ip).not.toBe("unknown");
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it("a huge all-whitespace/empty XFF degrades to 'unknown' without hanging", () => {
+    const huge = ",".repeat(200_000);
+    const t0 = Date.now();
+    const ip = clientIp(reqWith({ "x-forwarded-for": huge }));
+    expect(ip).toBe("unknown");
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
+  it("TRUSTED_PROXY_HOPS=NaN/garbage falls back to 1 (no infinite loop)", () => {
+    process.env.TRUSTED_PROXY_HOPS = "not-a-number";
+    expect(clientIp(reqWith({ "x-forwarded-for": "1.1.1.1, 2.2.2.2" }))).toBe("2.2.2.2");
+    process.env.TRUSTED_PROXY_HOPS = "-5";
+    expect(clientIp(reqWith({ "x-forwarded-for": "1.1.1.1, 2.2.2.2" }))).toBe("2.2.2.2");
+  });
+});
+
+// ── Class 4: bearer-strip & maskKey regex are linear (no ReDoS) ──────────────
+describe("auth-token parsing is ReDoS-safe", () => {
+  const strip = (s: string) => s.replace(/^Bearer\s+/i, "").trim();
+  it("strips a normal bearer token", () => {
+    expect(strip("Bearer gw_live_abc")).toBe("gw_live_abc");
+  });
+  it("a 1M-char header with maximal whitespace runs in well under a second", () => {
+    // /^Bearer\s+/i is anchored with a single \s+ run — linear, not catastrophic.
+    const evil = "Bearer" + " ".repeat(1_000_000) + "x";
+    const t0 = Date.now();
+    const out = strip(evil);
+    expect(out).toBe("x");
+    expect(Date.now() - t0).toBeLessThan(300);
+  });
+  it("a long non-matching header does not backtrack", () => {
+    const evil = "Bearer" + "\t".repeat(500_000); // \t is \s, but no trailing token
+    const t0 = Date.now();
+    strip(evil);
+    expect(Date.now() - t0).toBeLessThan(300);
+  });
 });

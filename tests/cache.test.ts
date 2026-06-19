@@ -73,6 +73,57 @@ describe("cacheKeyFor", () => {
     const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, model: "openai/gpt-4o-mini" });
     expect(k1).not.toBe(k2);
   });
+
+  // ── Cache-key completeness (Class 3) ───────────────────────────────────────
+  // EVERY output-affecting OpenAI parameter must change the key, or two requests
+  // that differ only in that param would collide and serve a poisoned response.
+  // This parametrized test fails if ANY field is dropped from CACHE_FIELDS.
+  describe("every output-affecting param changes the cache key", () => {
+    const OUTPUT_AFFECTING: Array<[string, unknown, unknown]> = [
+      ["temperature", 0.1, 0.9],
+      ["top_p", 0.1, 0.95],
+      ["max_tokens", 16, 4096],
+      ["stop", ["END"], ["STOP"]],
+      ["seed", 1, 2],
+      ["response_format", { type: "json_object" }, { type: "text" }],
+      ["frequency_penalty", 0, 1.5],
+      ["presence_penalty", 0, 1.5],
+      ["logit_bias", { "1": -100 }, { "2": 50 }],
+      ["n", 1, 3],
+      ["tools", [{ type: "function", function: { name: "a" } }], [{ type: "function", function: { name: "b" } }]],
+      ["tool_choice", "auto", "required"],
+      ["model", "openai/gpt-4o", "openai/gpt-4o-mini"],
+    ];
+    for (const [field, a, b] of OUTPUT_AFFECTING) {
+      it(`differs by ${field}`, () => {
+        const k1 = cacheKeyFor(KEY_HASH, { ...BODY_A, [field]: a });
+        const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, [field]: b });
+        expect(k1).not.toBe(k2);
+      });
+    }
+
+    it("messages content change → different key", () => {
+      const k1 = cacheKeyFor(KEY_HASH, { ...BODY_A, messages: [{ role: "user", content: "a" }] });
+      const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, messages: [{ role: "user", content: "b" }] });
+      expect(k1).not.toBe(k2);
+    });
+
+    it("a NON-output param (`user`) does NOT change the key — allowlist is tight", () => {
+      const k1 = cacheKeyFor(KEY_HASH, { ...BODY_A, user: "alice" });
+      const k2 = cacheKeyFor(KEY_HASH, { ...BODY_A, user: "bob" });
+      const base = cacheKeyFor(KEY_HASH, BODY_A);
+      expect(k1).toBe(k2);
+      expect(k1).toBe(base);
+    });
+
+    it("a __proto__ key in the body cannot collide distinct bodies (only allowlisted fields hash)", () => {
+      const k1 = cacheKeyFor(KEY_HASH, JSON.parse('{"model":"openai/gpt-4o","messages":[{"role":"user","content":"x"}],"__proto__":{"a":1}}'));
+      const k2 = cacheKeyFor(KEY_HASH, JSON.parse('{"model":"openai/gpt-4o","messages":[{"role":"user","content":"x"}],"__proto__":{"a":2}}'));
+      // __proto__ is not in CACHE_FIELDS so it is ignored — same allowlisted
+      // content → same key (the extra junk doesn't break or poison anything).
+      expect(k1).toBe(k2);
+    });
+  });
 });
 
 describe("getCached / setCached round-trip", () => {

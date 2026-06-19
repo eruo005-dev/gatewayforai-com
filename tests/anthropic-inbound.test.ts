@@ -298,17 +298,17 @@ describe("toAnthropicResponse", () => {
   });
 });
 
-// These document the throw-cases that the /v1/messages route now catches and
-// re-shapes as Anthropic-shaped errors (BUG 1). fromAnthropicRequest DOES throw
-// on a malformed message entry (a non-object message → reading `.content` of
-// null/number throws TypeError). toAnthropicResponse is fully defensive and does
-// NOT throw even on missing/garbage `choices`, so the route's response-translation
-// guard is belt-and-suspenders. Verified by these assertions.
-describe("translator throw-surface (guarded by the /v1/messages route)", () => {
-  it("fromAnthropicRequest THROWS when a message entry is null (non-object)", () => {
-    expect(() =>
-      fromAnthropicRequest({ model: "m", max_tokens: 10, messages: [null as any] }),
-    ).toThrow();
+// HARDENING: both translators are now TOTAL — they never throw on a malformed
+// message/block/tool entry, they skip or flatten it. The /v1/messages route's
+// try/catch is therefore belt-and-suspenders, and a malformed client request can
+// no longer be misclassified as a 500. These assertions pin that totality.
+describe("translator robustness (never throws on malformed input)", () => {
+  it("fromAnthropicRequest does NOT throw when a message entry is null — it skips it", () => {
+    let out: any;
+    expect(() => {
+      out = fromAnthropicRequest({ model: "m", max_tokens: 10, messages: [null as any] });
+    }).not.toThrow();
+    expect(out.messages).toEqual([]); // null message dropped
   });
 
   it("fromAnthropicRequest does NOT throw on numeric content (flattens to '')", () => {
@@ -327,6 +327,38 @@ describe("translator throw-surface (guarded by the /v1/messages route)", () => {
     expect(out.type).toBe("message");
     expect(out.content).toEqual([]);
   });
+});
+
+// Adversarial fuzz: 16 malformed request shapes — every one must translate
+// without throwing (the route depends on this to never emit a framework 500).
+describe("fromAnthropicRequest — adversarial malformed-shape fuzz (never throws)", () => {
+  const cases: Array<[string, any]> = [
+    ["null message", { model: "m", max_tokens: 10, messages: [null] }],
+    ["number message", { model: "m", max_tokens: 10, messages: [123] }],
+    ["string message", { model: "m", max_tokens: 10, messages: ["hi"] }],
+    ["empty-object message", { model: "m", max_tokens: 10, messages: [{}] }],
+    ["message without content", { model: "m", max_tokens: 10, messages: [{ role: "user" }] }],
+    ["numeric content", { model: "m", max_tokens: 10, messages: [{ role: "user", content: 5 }] }],
+    ["null content", { model: "m", max_tokens: 10, messages: [{ role: "user", content: null }] }],
+    ["content array with null block", { model: "m", max_tokens: 10, messages: [{ role: "user", content: [null] }] }],
+    ["content array with number block", { model: "m", max_tokens: 10, messages: [{ role: "user", content: [123] }] }],
+    ["assistant with null tool_use block", { model: "m", max_tokens: 10, messages: [{ role: "assistant", content: [null] }] }],
+    ["tool_result with null sub-block", { model: "m", max_tokens: 10, messages: [{ role: "user", content: [{ type: "tool_result", content: [null] }] }] }],
+    ["tools not an array", { model: "m", max_tokens: 10, messages: [], tools: "nope" }],
+    ["tools array with null", { model: "m", max_tokens: 10, messages: [], tools: [null] }],
+    ["tools entry without function fields", { model: "m", max_tokens: 10, messages: [], tools: [{}] }],
+    ["system as number", { model: "m", max_tokens: 10, system: 7, messages: [] }],
+    ["system block-array with null", { model: "m", max_tokens: 10, system: [null], messages: [] }],
+    ["messages not an array", { model: "m", max_tokens: 10, messages: "not-an-array" }],
+    ["tool_choice garbage", { model: "m", max_tokens: 10, messages: [], tool_choice: 42 }],
+  ];
+  for (const [name, body] of cases) {
+    it(`does not throw: ${name}`, () => {
+      let out: any;
+      expect(() => { out = fromAnthropicRequest(body); }).not.toThrow();
+      expect(Array.isArray(out.messages)).toBe(true);
+    });
+  }
 });
 
 describe("toAnthropicSSE", () => {

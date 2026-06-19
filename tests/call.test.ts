@@ -85,3 +85,60 @@ describe("callProvider — anthropic style", () => {
     expect(res.status).toBe(529);
   });
 });
+
+// ── SSRF: the fetched URL ORIGIN is fixed by the registry, never the model ──
+// A malicious "model" can carry absolute URLs, @-host tricks, path traversal,
+// CRLF, unicode/IDN — none of it may change the URL callProvider fetches. The
+// model is only ever serialized into the JSON body. (Class 1 — SSRF.)
+describe("callProvider — SSRF: model string can never redirect the upstream URL", () => {
+  const EVIL_MODELS = [
+    "http://evil.example/v1",
+    "https://attacker:443@evil.example",
+    "../../../../admin",
+    "%2e%2e%2fadmin",
+    "gpt-4o@evil.example",
+    "gpt-4o\r\nHost: evil.example",
+    "gpt-4o#@evil.example",
+    "//evil.example/x",
+    "gpt-4o⁄evil.example", // fraction-slash unicode
+    "ⓖevil.example",
+    " evil",
+    "x".repeat(5000),
+  ];
+
+  for (const evil of EVIL_MODELS) {
+    it(`openai-style URL stays api.openai.com for model ${JSON.stringify(evil.slice(0, 24))}`, async () => {
+      const fetchFn = vi.fn(async () => Response.json({ ok: true }));
+      await callProvider({
+        provider: "openai",
+        model: evil,
+        body: { messages: [] },
+        apiKey: "sk-1",
+        timeoutMs: 1000,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      });
+      const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe("https://api.openai.com/v1/chat/completions");
+      expect(new URL(url).origin).toBe("https://api.openai.com");
+      // The evil string travels only in the body, never the URL.
+      expect(JSON.parse(init.body as string).model).toBe(evil);
+    });
+
+    it(`anthropic-style URL stays api.anthropic.com for model ${JSON.stringify(evil.slice(0, 24))}`, async () => {
+      const fetchFn = vi.fn(async () =>
+        Response.json({ id: "m", content: [], stop_reason: "end_turn", usage: { input_tokens: 0, output_tokens: 0 } }),
+      );
+      await callProvider({
+        provider: "anthropic",
+        model: evil,
+        body: { messages: [{ role: "user", content: "hi" }] },
+        apiKey: "sk-ant-1",
+        timeoutMs: 1000,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      });
+      const [url] = fetchFn.mock.calls[0] as unknown as [string];
+      expect(new URL(url).origin).toBe("https://api.anthropic.com");
+      expect(url).toBe("https://api.anthropic.com/v1/messages");
+    });
+  }
+});

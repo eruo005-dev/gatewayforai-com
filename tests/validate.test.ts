@@ -49,4 +49,38 @@ describe("validateConfigInput", () => {
     expect(validateConfigInput({ ...GOOD, rateLimit: { rpm: 2000 } }).error).toMatch(/rpm/i);
     expect(validateConfigInput({ ...GOOD, rateLimit: { rpm: 1.5 } }).error).toMatch(/rpm/i);
   });
+
+  // ── Prototype-pollution / type-confusion regression (Class 5) ──────────────
+  // The `in` operator walks Object.prototype, so "constructor"/"__proto__"/
+  // "toString"/etc. delivered as JSON own-properties would have falsely passed
+  // the provider check. validateConfigInput must use Object.hasOwn and REJECT
+  // every inherited key as an unknown provider.
+  describe("prototype-pollution provider keys are rejected (Object.hasOwn)", () => {
+    const POLLUTED = ["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty", "isPrototypeOf"];
+    for (const bad of POLLUTED) {
+      it(`rejects provider key "${bad}"`, () => {
+        // JSON.parse is how these arrive over the wire as real own-properties.
+        const body = JSON.parse(JSON.stringify({ ...GOOD, providers: { [bad]: "some-key" } }));
+        const r = validateConfigInput(body);
+        expect(r.error).toMatch(/unknown provider/i);
+        expect(r.value).toBeUndefined();
+      });
+
+      it(`rejects chain entry provider "${bad}"`, () => {
+        const body = JSON.parse(
+          JSON.stringify({ ...GOOD, fallbackChain: [{ provider: bad, model: "x" }] }),
+        );
+        const r = validateConfigInput(body);
+        expect(r.error).toMatch(/unknown provider/i);
+        expect(r.value).toBeUndefined();
+      });
+    }
+
+    it("does not pollute Object.prototype after processing a __proto__ provider", () => {
+      const body = JSON.parse('{"providers":{"__proto__":"x","openai":"sk-1"},"fallbackChain":[{"provider":"openai","model":"gpt-4o"}],"rateLimit":{"rpm":60}}');
+      validateConfigInput(body);
+      expect(({} as any).polluted).toBeUndefined();
+      expect((Object.prototype as any).baseURL).toBeUndefined();
+    });
+  });
 });

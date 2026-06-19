@@ -488,11 +488,12 @@ describe("POST /v1/messages — Anthropic error shape", () => {
     expectAnthropicError(await res.json());
   });
 
-  it("translator throw (messages:[null]) → 500 in Anthropic shape (BUG 1 fix)", async () => {
-    // fromAnthropicRequest's mapMessage(null) throws (reads .content on null).
-    // Without the try/catch around the translator this would escape to a
-    // non-Anthropic Next.js 500. The route's guard must produce status 500 with
-    // the Anthropic { type:"error", ... } envelope.
+  it("malformed messages:[null] never crashes the route, returns Anthropic error shape (HARDENING)", async () => {
+    // fromAnthropicRequest is now TOTAL: mapMessage(null) is skipped rather than
+    // throwing (reads of .content on null are guarded). The route must therefore
+    // never escape to a non-Anthropic Next.js 500. It proceeds with a best-effort
+    // translation; with no upstream reachable in this harness it surfaces a
+    // well-formed Anthropic { type:"error", ... } envelope (not a framework crash).
     const res = await messagesPOST(
       req("http://t/v1/messages", {
         method: "POST",
@@ -500,7 +501,9 @@ describe("POST /v1/messages — Anthropic error shape", () => {
         body: JSON.stringify({ model: "auto", max_tokens: 10, messages: [null] }),
       }),
     );
-    expect(res.status).toBe(500);
+    // Any non-2xx is acceptable; what matters is it's a structured Anthropic error,
+    // never a thrown exception / framework 500 with a non-Anthropic body.
+    expect(res.status).toBeGreaterThanOrEqual(400);
     expectAnthropicError(await res.json());
   });
 });

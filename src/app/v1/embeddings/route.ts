@@ -69,7 +69,9 @@ export async function POST(req: Request) {
   const provider = body.model.slice(0, slash) as ProviderId;
   const bareModel = body.model.slice(slash + 1);
 
-  if (!PROVIDERS[provider]) {
+  // Object.hasOwn, not truthiness: PROVIDERS["constructor"]/["__proto__"] are
+  // truthy inherited members and would slip a bogus provider past this check.
+  if (!Object.hasOwn(PROVIDERS, provider)) {
     return errJson(
       400,
       "invalid_request_error",

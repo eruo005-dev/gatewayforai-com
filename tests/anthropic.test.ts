@@ -429,3 +429,37 @@ describe("translateAnthropicSSE — tool_use streaming", () => {
     expect(toolArg.choices[0].delta.tool_calls[0].index).toBe(0);
   });
 });
+
+// Adversarial fuzz: 16 malformed OpenAI-side request shapes — toAnthropicBody
+// must translate each without throwing. callProvider runs this synchronously
+// before the upstream fetch, so a throw here would otherwise be misreported as a
+// provider failure by the gateway retry loop. (Class 2 — translator robustness.)
+describe("toAnthropicBody — adversarial malformed-shape fuzz (never throws)", () => {
+  const cases: Array<[string, any]> = [
+    ["null message", { model: "m", messages: [null] }],
+    ["number message", { model: "m", messages: [123] }],
+    ["string message", { model: "m", messages: ["hi"] }],
+    ["empty-object message", { model: "m", messages: [{}] }],
+    ["message without content", { model: "m", messages: [{ role: "user" }] }],
+    ["numeric content", { model: "m", messages: [{ role: "user", content: 5 }] }],
+    ["null content", { model: "m", messages: [{ role: "user", content: null }] }],
+    ["content array with null part", { model: "m", messages: [{ role: "user", content: [null] }] }],
+    ["content array w/ null part + cache_control sibling", { model: "m", messages: [{ role: "user", content: [null, { type: "text", text: "x", cache_control: { type: "ephemeral" } }] }] }],
+    ["assistant tool_calls not array", { model: "m", messages: [{ role: "assistant", tool_calls: "nope" }] }],
+    ["assistant tool_calls array with null", { model: "m", messages: [{ role: "assistant", tool_calls: [null] }] }],
+    ["assistant tool_call missing function", { model: "m", messages: [{ role: "assistant", tool_calls: [{ id: "x" }] }] }],
+    ["assistant tool_call function null", { model: "m", messages: [{ role: "assistant", tool_calls: [{ id: "x", function: null }] }] }],
+    ["tool role with array content of nulls", { model: "m", messages: [{ role: "tool", tool_call_id: "t", content: [null] }] }],
+    ["tools not array", { model: "m", messages: [], tools: "nope" }],
+    ["tools array with null", { model: "m", messages: [], tools: [null] }],
+    ["system message block-array with null part", { model: "m", messages: [{ role: "system", content: [null, { type: "text", text: "ok", cache_control: {} }] }] }],
+    ["messages not an array", { model: "m", messages: "not-an-array" }],
+  ];
+  for (const [name, body] of cases) {
+    it(`does not throw: ${name}`, () => {
+      let out: any;
+      expect(() => { out = toAnthropicBody(body); }).not.toThrow();
+      expect(Array.isArray(out.messages)).toBe(true);
+    });
+  }
+});

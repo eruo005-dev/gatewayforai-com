@@ -21,7 +21,14 @@ export async function POST(req: Request) {
     return errJson(400, "invalid_request_error", "Body must be valid JSON.");
   }
   const provider = body.provider as ProviderId;
-  if (!PROVIDERS[provider] || typeof body.key !== "string" || !body.key.trim()) {
+  // Object.hasOwn, not truthiness: PROVIDERS["constructor"]/["__proto__"] are
+  // truthy inherited members and would otherwise pass this provider check.
+  if (
+    typeof provider !== "string" ||
+    !Object.hasOwn(PROVIDERS, provider) ||
+    typeof body.key !== "string" ||
+    !body.key.trim()
+  ) {
     return errJson(400, "invalid_request_error", "`provider` and `key` are required.");
   }
 
