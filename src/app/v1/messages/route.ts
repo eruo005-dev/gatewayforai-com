@@ -3,6 +3,7 @@ import { fromAnthropicRequest, toAnthropicResponse, toAnthropicSSE } from "@/lib
 import { redisBreaker } from "@/lib/breaker";
 import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
+import { redactKeys } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { checkGatewayIpLimit, checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
 import { sortChain } from "@/lib/routing";
@@ -228,5 +229,8 @@ async function upstreamError(res: Response): Promise<{ status: number; message: 
   } catch {
     // keep fallback message
   }
-  return { status: res.status || 502, message };
+  // Redact any provider-key fingerprint the upstream echoed back into its error
+  // message before surfacing it to the gw-key holder (don't leak the last-4 of
+  // the configured provider key).
+  return { status: res.status || 502, message: redactKeys(message) };
 }

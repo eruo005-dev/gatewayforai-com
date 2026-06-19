@@ -137,6 +137,33 @@ describe("POST /api/config/subkeys — sub-key privilege boundary", () => {
     expect(res.status).toBe(401);
   });
 
+  it("DELETE with a 1-char id → 400 (must be the full 8-char id) (FIX 4)", async () => {
+    // A short prefix could revoke an unintended sub-key via startsWith — reject it.
+    const res = await subkeysDELETE(
+      req("http://t/api/config/subkeys", {
+        method: "DELETE",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ id: sha256(subKey).slice(0, 1) }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    // The sub-key must still resolve (it was NOT revoked).
+    expect(await resolveGatewayAuth(subKey)).not.toBeNull();
+  });
+
+  it("DELETE with the correct 8-char id revokes the sub-key (FIX 4)", async () => {
+    const id = sha256(subKey).slice(0, 8);
+    const res = await subkeysDELETE(
+      req("http://t/api/config/subkeys", {
+        method: "DELETE",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({ id }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await resolveGatewayAuth(subKey)).toBeNull();
+  });
+
   it("DELETE unknown id → 404; valid id → revoked (auth null after) (MEDIUM 15)", async () => {
     // Unknown id: no match in the parent index → 404.
     const miss = await subkeysDELETE(
@@ -634,16 +661,34 @@ describe("POST /api/config — create", () => {
     );
     expect(res.status).toBe(429);
   });
+
+  it("per-IP daily creation cap → 429 after the limit is exceeded (FIX 1)", async () => {
+    // The 20/min IP limiter is mocked to PASS, so this isolates the daily cap
+    // (bumpConfigCreateCount, backed by FakeRedis). Default cap is 50; the 51st
+    // create from the same IP must 429. All requests share clientIp()="unknown"
+    // here (no x-real-ip / x-forwarded-for), so they hit one IP counter.
+    const make = () =>
+      configPOST(req("http://t/api/config", { method: "POST", body: JSON.stringify(VALID_BODY) }));
+    for (let i = 0; i < 50; i++) {
+      expect((await make()).status).toBe(201);
+    }
+    const capped = await make();
+    expect(capped.status).toBe(429);
+    const body = await capped.json();
+    expect(body.error.code).toBe("rate_limit_exceeded");
+  });
 });
 
 // ─── GET /api/health: ok + 503 (HIGH 8) ─────────────────────────────────────
 describe("GET /api/health", () => {
-  it("normal → 200 { ok:true, redis:true }", async () => {
+  it("normal → 200 { ok:true, redis:true } and NO version/commit SHA (FIX 3)", async () => {
     const res = await healthGET();
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.redis).toBe(true);
+    // The public probe must not fingerprint the deployed commit.
+    expect(body).not.toHaveProperty("version");
   });
 
   it("redis set/get throws → 503 { ok:false }", async () => {

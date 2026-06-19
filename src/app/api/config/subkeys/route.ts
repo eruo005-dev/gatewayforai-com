@@ -144,6 +144,12 @@ export async function DELETE(req: Request) {
 
   const id = typeof body.id === "string" ? body.id.trim() : "";
   if (!id) return errJson(400, "invalid_request_error", "id is required.");
+  // Require the EXACT 8-char id that GET returns (first 8 chars of the hash).
+  // A short prefix (e.g. a single char) would match by startsWith and could
+  // revoke an unintended sub-key, so reject anything that isn't the full id.
+  if (id.length !== 8) {
+    return errJson(400, "invalid_request_error", "Provide the full 8-character sub-key id.");
+  }
 
   // Resolve the id prefix to a full hash from the parent's index
   const list = await listSubKeys(gwKey);

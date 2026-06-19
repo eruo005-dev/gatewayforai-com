@@ -47,3 +47,20 @@ out of scope (that is the operator's trust boundary).
 
 If you find a way to violate any of these invariants, that is exactly the kind of report
 we want.
+
+## Self-hosting note: client-IP trust
+
+Per-IP abuse controls rely on `clientIp()` (`src/lib/client-ip.ts`), which trusts
+`x-real-ip` and then the **rightmost** entries of `x-forwarded-for`. This is only
+spoof-safe behind a reverse proxy that **strips/overwrites any client-supplied
+`x-real-ip`** and appends the true client to `x-forwarded-for`. Vercel does this, so
+the hosted instance is safe by default.
+
+If you self-host behind a different proxy, you **must**:
+
+- set `TRUSTED_PROXY_HOPS` to the number of trusted proxy hops in front of the app, and
+- ensure your proxy overwrites (not merely forwards) the `x-real-ip` header and the
+  client-controlled left side of `x-forwarded-for`.
+
+Otherwise a caller can spoof these headers to dodge every per-IP rate limit and the
+per-IP config-creation cap.

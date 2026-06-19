@@ -3,7 +3,7 @@ import { redisBreaker } from "@/lib/breaker";
 import { cacheKeyFor, getCached, setCached } from "@/lib/cache";
 import { clientIp } from "@/lib/client-ip";
 import { resolveGatewayAuth } from "@/lib/config-store";
-import { errJson } from "@/lib/errors";
+import { errJson, redactKeys } from "@/lib/errors";
 import { resolveChain, routeRequest } from "@/lib/gateway";
 import { estimateCostUsd } from "@/lib/pricing";
 import { checkGatewayIpLimit, checkRateLimit, checkTokenLimit, recordTokens, retryAfterSeconds } from "@/lib/ratelimit";
@@ -25,6 +25,32 @@ function parseCacheTtl(req: Request): number | null {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n)) return null;
   return Math.min(Math.max(n, 1), 86400);
+}
+
+/**
+ * Build a non-streaming error Response from a failed upstream, redacting any
+ * provider-key fingerprint the upstream echoed into its error message (so the
+ * gw-key holder never sees the last-4 of the configured provider key). Reads the
+ * body, redacts `error.message` if present, and re-emits with the gateway headers.
+ * Only call on the NON-STREAMING error path (it consumes the body).
+ */
+async function redactedErrorResponse(
+  upstream: Response,
+  headers: Headers,
+): Promise<Response> {
+  const text = await upstream.text();
+  let outBody = text;
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed?.error?.message === "string") {
+      parsed.error.message = redactKeys(parsed.error.message);
+      outBody = JSON.stringify(parsed);
+    }
+  } catch {
+    // Non-JSON error body: redact the raw string as a best-effort sweep.
+    outBody = redactKeys(text);
+  }
+  return new Response(outBody, { status: upstream.status, headers });
 }
 
 export async function POST(req: Request) {
@@ -212,6 +238,11 @@ export async function POST(req: Request) {
     if (limits.tpm && !result.response.ok) {
       after(() => recordTokens(keyHash, -estimatedTokens).catch(() => {}));
     }
+    // On a non-ok upstream, redact any provider-key fingerprint in the error body
+    // before passing it through (this path is non-streaming).
+    if (!result.response.ok) {
+      return redactedErrorResponse(result.response, headers);
+    }
     return new Response(result.response.body, { status: result.response.status, headers });
   }
 
@@ -241,5 +272,10 @@ export async function POST(req: Request) {
   headers.set("x-gateway-fallback-count", String(result.fallbacks));
   headers.set("x-gateway-latency-ms", String(Date.now() - started));
   if (routeStrategy) headers.set("x-gateway-route", routeStrategy);
+  // On a non-streaming, non-ok upstream, redact any provider-key fingerprint in
+  // the error body. Streaming bodies are passed through untouched (can't buffer).
+  if (!body.stream && !result.response.ok) {
+    return redactedErrorResponse(result.response, headers);
+  }
   return new Response(result.response.body, { status: result.response.status, headers });
 }
