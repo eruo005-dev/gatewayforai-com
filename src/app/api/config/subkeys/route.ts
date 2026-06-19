@@ -4,6 +4,7 @@ import {
   revokeSubKey,
   resolveGatewayAuth,
 } from "@/lib/config-store";
+import { clientIp } from "@/lib/client-ip";
 import { sha256 } from "@/lib/crypto";
 import { errJson } from "@/lib/errors";
 import { checkIpLimit, retryAfterSeconds } from "@/lib/ratelimit";
@@ -11,8 +12,7 @@ import { checkIpLimit, retryAfterSeconds } from "@/lib/ratelimit";
 export const runtime = "nodejs";
 
 async function ipGate(req: Request): Promise<Response | null> {
-  const ip = (req.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
-  const rl = await checkIpLimit(ip);
+  const rl = await checkIpLimit(clientIp(req));
   if (rl.success) return null;
   return errJson(429, "rate_limit_exceeded", "Too many requests. Try again shortly.", undefined, {
     "retry-after": retryAfterSeconds(rl.reset),

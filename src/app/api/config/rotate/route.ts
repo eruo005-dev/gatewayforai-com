@@ -1,3 +1,4 @@
+import { clientIp } from "@/lib/client-ip";
 import { rotateKey } from "@/lib/config-store";
 import { errJson } from "@/lib/errors";
 import { checkIpLimit, retryAfterSeconds } from "@/lib/ratelimit";
@@ -5,8 +6,7 @@ import { checkIpLimit, retryAfterSeconds } from "@/lib/ratelimit";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const ip = (req.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
-  const rl = await checkIpLimit(ip);
+  const rl = await checkIpLimit(clientIp(req));
   if (!rl.success) {
     return errJson(429, "rate_limit_exceeded", "Too many requests.", undefined, {
       "retry-after": retryAfterSeconds(rl.reset),

@@ -1,3 +1,4 @@
+import { clientIp } from "@/lib/client-ip";
 import { errJson } from "@/lib/errors";
 import { PROVIDERS } from "@/lib/providers/registry";
 import { checkIpLimit, retryAfterSeconds } from "@/lib/ratelimit";
@@ -6,8 +7,7 @@ import type { ProviderId } from "@/lib/types";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const ip = (req.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
-  const rl = await checkIpLimit(ip);
+  const rl = await checkIpLimit(clientIp(req));
   if (!rl.success) {
     return errJson(429, "rate_limit_exceeded", "Too many validation attempts.", undefined, {
       "retry-after": retryAfterSeconds(rl.reset),
