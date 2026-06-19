@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import CopyButton from "@/components/CopyButton";
 
 const PROVIDERS = [
-  { id: "openai", label: "OpenAI", defaultModel: "gpt-4o" },
-  { id: "anthropic", label: "Anthropic", defaultModel: "claude-sonnet-4-6" },
-  { id: "gemini", label: "Google Gemini", defaultModel: "gemini-2.0-flash" },
-  { id: "groq", label: "Groq", defaultModel: "llama-3.3-70b-versatile" },
-  { id: "mistral", label: "Mistral", defaultModel: "mistral-large-latest" },
-  { id: "together", label: "Together", defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
-  { id: "deepseek", label: "DeepSeek", defaultModel: "deepseek-chat" },
-  { id: "openrouter", label: "OpenRouter", defaultModel: "openrouter/auto" },
+  { id: "openai", label: "OpenAI", defaultModel: "gpt-4o", hint: "starts with sk-" },
+  { id: "anthropic", label: "Anthropic", defaultModel: "claude-sonnet-4-6", hint: "starts with sk-ant-" },
+  { id: "gemini", label: "Google Gemini", defaultModel: "gemini-2.0-flash", hint: "starts with AIza" },
+  { id: "groq", label: "Groq", defaultModel: "llama-3.3-70b-versatile", hint: "starts with gsk_" },
+  { id: "mistral", label: "Mistral", defaultModel: "mistral-large-latest", hint: "" },
+  { id: "together", label: "Together", defaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", hint: "" },
+  { id: "deepseek", label: "DeepSeek", defaultModel: "deepseek-chat", hint: "starts with sk-" },
+  { id: "openrouter", label: "OpenRouter", defaultModel: "openrouter/auto", hint: "starts with sk-or-" },
 ] as const;
 
 type Validity = "unknown" | "checking" | "ok" | "bad";
@@ -25,7 +26,6 @@ export default function Start() {
   const [rpm, setRpm] = useState(60);
   const [tpm, setTpm] = useState(0); // 0 = off
   const [gatewayKey, setGatewayKey] = useState("");
-  const [copyLabel, setCopyLabel] = useState("Copy key");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -129,21 +129,15 @@ res = client.chat.completions.create(
           <h3>Gateway key — shown once, never again</h3>
           <p className="hint">We store only a hash. Copy it now.</p>
           <div className="keybox">{gatewayKey}</div>
-          <button
-            className="btn primary"
-            onClick={() => {
-              navigator.clipboard.writeText(gatewayKey);
-              setCopyLabel("Copied ✓");
-              setTimeout(() => setCopyLabel("Copy key"), 2000);
-            }}
-          >
-            {copyLabel}
-          </button>
+          <CopyButton value={gatewayKey} label="Copy key" className="primary" />
         </div>
         {([["JavaScript", s.js], ["Python", s.py], ["curl", s.curl]] as const).map(([label, code]) => (
           <div className="panel" key={label}>
-            <h3>{label}</h3>
-            <pre style={{ fontSize: 12.5, overflowX: "auto", color: "var(--muted)" }}>{code}</pre>
+            <div className="snippet-head">
+              <h3 style={{ margin: 0 }}>{label}</h3>
+              <CopyButton value={code} label="Copy" style={{ fontSize: 12, padding: "6px 12px" }} />
+            </div>
+            <pre className="snippet-pre">{code}</pre>
           </div>
         ))}
         <p style={{ color: "var(--muted)" }}>
@@ -170,19 +164,27 @@ res = client.chat.completions.create(
             <input
               id={`key-${p.id}`}
               type="password"
-              placeholder={`${p.label} API key (optional)`}
+              placeholder={p.hint ? `${p.label} key — ${p.hint}` : `${p.label} API key (optional)`}
               value={keys[p.id] ?? ""}
               onChange={(e) => setKey(p.id, e.target.value)}
               onBlur={() => validate(p.id)}
             />
-            <span className={`badge ${valid[p.id] === "ok" ? "ok" : valid[p.id] === "bad" ? "bad" : ""}`}>
+            <span
+              className={`badge ${valid[p.id] === "ok" ? "ok" : valid[p.id] === "bad" ? "bad" : ""}`}
+              aria-live="polite"
+            >
               {valid[p.id] === "ok" ? "✓" : valid[p.id] === "bad" ? "✗" : valid[p.id] === "checking" ? "…" : ""}
             </span>
-            {valid[p.id] === "bad" && (
-              <span style={{ fontSize: 12, color: "var(--red)", marginLeft: 6 }}>
-                {badReason[p.id] === "network" ? "Couldn't verify — try again" : "Key rejected by provider"}
-              </span>
-            )}
+            <span aria-live="polite" style={{ marginLeft: 6 }}>
+              {valid[p.id] === "checking" && (
+                <span className="fmt-hint">validating…</span>
+              )}
+              {valid[p.id] === "bad" && (
+                <span style={{ fontSize: 12, color: "var(--red)" }}>
+                  {badReason[p.id] === "network" ? "Couldn't verify — try again" : "Key rejected by provider"}
+                </span>
+              )}
+            </span>
           </div>
         ))}
       </div>
@@ -192,7 +194,9 @@ res = client.chat.completions.create(
         <p className="hint">
           Order decides who answers first when model is &quot;auto&quot;. Edit model names freely.
         </p>
-        {chain.length === 0 && <p className="hint">Add a provider key above to build your chain.</p>}
+        {chain.length === 0 && (
+          <div className="empty-card">Add a provider key above to build your fallback chain.</div>
+        )}
         {chain.map((e, i) => (
           <div className="chain-row" key={e.provider}>
             <span className="order">{i + 1}</span>
@@ -236,10 +240,15 @@ res = client.chat.completions.create(
         </div>
       </div>
 
-      {error && <p className="error-text">{error}</p>}
+      <div aria-live="assertive">
+        {error && <p className="error-text">{error}</p>}
+      </div>
       <button className="btn primary" disabled={busy || chain.length === 0} onClick={create}>
         {busy ? "Creating…" : "Create gateway →"}
       </button>
+      {chain.length === 0 && (
+        <p className="helper-text">Add at least one provider key to create your gateway.</p>
+      )}
     </main>
   );
 }

@@ -2,6 +2,14 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import CopyButton from "@/components/CopyButton";
+import ConfirmDialog from "@/components/ConfirmDialog";
+
+type Pending =
+  | { kind: "rotate" }
+  | { kind: "delete" }
+  | { kind: "revoke"; id: string; label: string }
+  | null;
 
 interface ConfigView {
   providers: Record<string, string>;
@@ -45,6 +53,9 @@ export default function Manage() {
   const [newSubKey, setNewSubKey] = useState("");
   const [subBusy, setSubBusy] = useState(false);
 
+  // Confirmation modal state
+  const [pending, setPending] = useState<Pending>(null);
+
   async function call(method: string, path = "/api/config", body?: unknown) {
     const res = await fetch(path, {
       method,
@@ -84,7 +95,6 @@ export default function Manage() {
   }
 
   async function rotate() {
-    if (!confirm("Rotate key? The current key stops working immediately.")) return;
     setBusy(true); setError("");
     try {
       const { gatewayKey } = await call("POST", "/api/config/rotate");
@@ -96,7 +106,6 @@ export default function Manage() {
   }
 
   async function destroy() {
-    if (!confirm("Delete this gateway config permanently?")) return;
     setBusy(true); setError("");
     try { await call("DELETE"); setCfg(null); setKey(""); setNotice("Config deleted."); setSubKeys(null); }
     catch (e) { setError((e as Error).message); }
@@ -130,8 +139,7 @@ export default function Manage() {
     finally { setSubBusy(false); }
   }
 
-  async function revokeSub(id: string, label: string) {
-    if (!confirm(`Revoke sub-key "${label}"? It will stop working immediately.`)) return;
+  async function revokeSub(id: string) {
     setSubBusy(true); setError("");
     try {
       await call("DELETE", "/api/config/subkeys", { id });
@@ -139,6 +147,30 @@ export default function Manage() {
       setSubKeys(list);
     } catch (e) { setError((e as Error).message); }
     finally { setSubBusy(false); }
+  }
+
+  function runPending() {
+    const p = pending;
+    setPending(null);
+    if (!p) return;
+    if (p.kind === "rotate") void rotate();
+    else if (p.kind === "delete") void destroy();
+    else if (p.kind === "revoke") void revokeSub(p.id);
+  }
+
+  // tiny inline-SVG sparkline of daily request counts
+  function Sparkline({ data }: { data: number[] }) {
+    if (data.length === 0) return null;
+    const w = 320, h = 36, max = Math.max(1, ...data);
+    const step = data.length > 1 ? w / (data.length - 1) : w;
+    const pts = data.map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * (h - 4) - 2).toFixed(1)}`).join(" ");
+    return (
+      <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img"
+        aria-label="Daily request volume over the last 30 days">
+        <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth="1.5"
+          strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+    );
   }
 
   return (
@@ -160,14 +192,18 @@ export default function Manage() {
         </div>
       </div>
 
-      {notice && <p style={{ color: "var(--accent)", fontFamily: "var(--mono)", fontSize: 13 }}>{notice}</p>}
+      <div aria-live="polite">
+        {notice && <p style={{ color: "var(--accent)", fontFamily: "var(--mono)", fontSize: 13 }}>{notice}</p>}
+      </div>
       {rotatedKey && (
         <div>
           <div className="keybox">{rotatedKey}</div>
-          <button className="btn" onClick={() => navigator.clipboard.writeText(rotatedKey)}>Copy key</button>
+          <CopyButton value={rotatedKey} label="Copy key" />
         </div>
       )}
-      {error && <p className="error-text">{error}</p>}
+      <div aria-live="assertive">
+        {error && <p className="error-text">{error}</p>}
+      </div>
 
       {cfg && (
         <>
@@ -248,41 +284,70 @@ export default function Manage() {
               Sub-keys (<span className="mono">gw_sub_…</span>) route through your providers but have their own rate-limit buckets and can be revoked individually. They cannot read or modify your config.
             </p>
 
-            {subKeys && subKeys.length > 0 && (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 16 }}>
-                <thead>
-                  <tr style={{ color: "var(--muted)", textAlign: "left" }}>
-                    <th style={{ padding: "4px 8px 4px 0" }}>Label</th>
-                    <th style={{ padding: "4px 8px" }}>ID</th>
-                    <th style={{ padding: "4px 8px" }}>RPM</th>
-                    <th style={{ padding: "4px 8px" }}>TPM</th>
-                    <th style={{ padding: "4px 8px" }}>Created</th>
-                    <th style={{ padding: "4px 0 4px 8px" }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {subKeys.map((sk) => (
-                    <tr key={sk.id} style={{ borderTop: "1px solid var(--line)" }}>
-                      <td style={{ padding: "6px 8px 6px 0" }}>{sk.label}</td>
-                      <td style={{ padding: "6px 8px", fontFamily: "var(--mono)", fontSize: 12 }}>{sk.id}</td>
-                      <td style={{ padding: "6px 8px" }}>{sk.rpm ?? "parent"}</td>
-                      <td style={{ padding: "6px 8px" }}>{sk.tpm != null ? (sk.tpm >= 1_000_000 ? `${sk.tpm / 1_000_000}M` : `${sk.tpm / 1000}k`) : "parent"}</td>
-                      <td style={{ padding: "6px 8px", color: "var(--muted)" }}>{sk.createdAt.slice(0, 10)}</td>
-                      <td style={{ padding: "6px 0 6px 8px" }}>
-                        <button
-                          className="btn"
-                          style={{ fontSize: 12, padding: "2px 8px", color: "var(--red)", borderColor: "var(--red)" }}
-                          disabled={subBusy}
-                          onClick={() => revokeSub(sk.id, sk.label)}
-                        >
-                          Revoke
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            {subKeys && subKeys.length > 0 && (() => {
+              const fmtTpm = (sk: SubKeyView) =>
+                sk.tpm != null ? (sk.tpm >= 1_000_000 ? `${sk.tpm / 1_000_000}M` : `${sk.tpm / 1000}k`) : "parent";
+              return (
+                <>
+                  <div className="table-scroll subkey-table" style={{ marginBottom: 16 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 480 }}>
+                      <thead>
+                        <tr style={{ color: "var(--muted)", textAlign: "left" }}>
+                          <th style={{ padding: "4px 8px 4px 0" }}>Label</th>
+                          <th style={{ padding: "4px 8px" }}>ID</th>
+                          <th style={{ padding: "4px 8px" }}>RPM</th>
+                          <th style={{ padding: "4px 8px" }}>TPM</th>
+                          <th style={{ padding: "4px 8px" }}>Created</th>
+                          <th style={{ padding: "4px 0 4px 8px" }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {subKeys.map((sk) => (
+                          <tr key={sk.id} style={{ borderTop: "1px solid var(--line)" }}>
+                            <td style={{ padding: "6px 8px 6px 0" }}>{sk.label}</td>
+                            <td style={{ padding: "6px 8px", fontFamily: "var(--mono)", fontSize: 12 }}>{sk.id}</td>
+                            <td style={{ padding: "6px 8px" }}>{sk.rpm ?? "parent"}</td>
+                            <td style={{ padding: "6px 8px" }}>{fmtTpm(sk)}</td>
+                            <td style={{ padding: "6px 8px", color: "var(--muted)" }}>{sk.createdAt.slice(0, 10)}</td>
+                            <td style={{ padding: "6px 0 6px 8px" }}>
+                              <button
+                                className="btn btn-danger"
+                                style={{ fontSize: 12, padding: "2px 8px" }}
+                                disabled={subBusy}
+                                onClick={() => setPending({ kind: "revoke", id: sk.id, label: sk.label })}
+                              >
+                                Revoke
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="subkey-cards">
+                    {subKeys.map((sk) => (
+                      <div className="subkey-card" key={sk.id}>
+                        <div className="row"><strong>{sk.label}</strong>
+                          <button
+                            className="btn btn-danger"
+                            style={{ fontSize: 12, padding: "2px 8px" }}
+                            disabled={subBusy}
+                            onClick={() => setPending({ kind: "revoke", id: sk.id, label: sk.label })}
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                        <div className="row"><span className="k">ID</span><span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{sk.id}</span></div>
+                        <div className="row"><span className="k">RPM</span><span>{sk.rpm ?? "parent"}</span></div>
+                        <div className="row"><span className="k">TPM</span><span>{fmtTpm(sk)}</span></div>
+                        <div className="row"><span className="k">Created</span><span>{sk.createdAt.slice(0, 10)}</span></div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
             {subKeys && subKeys.length === 0 && (
               <p className="hint" style={{ marginBottom: 16 }}>No sub-keys yet.</p>
             )}
@@ -339,7 +404,7 @@ export default function Manage() {
                   New sub-key — copy it now, shown once:
                 </p>
                 <div className="keybox">{newSubKey}</div>
-                <button className="btn" onClick={() => navigator.clipboard.writeText(newSubKey)}>Copy key</button>
+                <CopyButton value={newSubKey} label="Copy key" />
               </div>
             )}
           </div>
@@ -347,27 +412,57 @@ export default function Manage() {
           <div className="panel">
             <h3>Usage — last 30 days</h3>
             <p className="hint">Last 30 days · counters only, no request contents stored.</p>
-            <pre style={{ fontSize: 12.5, color: "var(--muted)", overflowX: "auto" }}>
-              {"date         requests  fallbacks  errors\n" +
-                cfg.usage
-                  .map((d) =>
-                    `${d.date}   ${String(d.requests).padStart(8)}  ${String(d.fallbacks).padStart(9)}  ${String(d.errors).padStart(6)}`)
-                  .join("\n")}
-            </pre>
+            <Sparkline data={cfg.usage.map((d) => Number(d.requests) || 0)} />
+            <div className="table-scroll">
+              <pre className="usage-pre">
+                {"date         requests  fallbacks  errors\n" +
+                  cfg.usage
+                    .map((d) =>
+                      `${d.date}   ${String(d.requests).padStart(8)}  ${String(d.fallbacks).padStart(9)}  ${String(d.errors).padStart(6)}`)
+                    .join("\n")}
+              </pre>
+            </div>
           </div>
 
           <div className="panel">
             <h3>Danger zone</h3>
             <p className="hint">Rotation invalidates the old key instantly. Deletion is permanent.</p>
-            <button className="btn" onClick={rotate} disabled={busy} style={{ marginRight: 10 }}>
+            <button className="btn" onClick={() => setPending({ kind: "rotate" })} disabled={busy} style={{ marginRight: 10 }}>
               Rotate key
             </button>
-            <button className="btn" onClick={destroy} disabled={busy} style={{ color: "var(--red)", borderColor: "var(--red)" }}>
+            <button className="btn btn-danger" onClick={() => setPending({ kind: "delete" })} disabled={busy}>
               Delete config
             </button>
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={pending?.kind === "rotate"}
+        title="Rotate gateway key?"
+        body="A new key is generated and the current key stops working immediately. Update any clients using the old key."
+        confirmLabel="Rotate key"
+        tone="default"
+        onConfirm={runPending}
+        onCancel={() => setPending(null)}
+      />
+      <ConfirmDialog
+        open={pending?.kind === "delete"}
+        title="Delete this config permanently?"
+        body={<>This removes your encrypted provider keys, sub-keys, and usage counters. This cannot be undone. Type <span className="mono">DELETE</span> to confirm.</>}
+        confirmLabel="Delete config"
+        requireText="DELETE"
+        onConfirm={runPending}
+        onCancel={() => setPending(null)}
+      />
+      <ConfirmDialog
+        open={pending?.kind === "revoke"}
+        title="Revoke sub-key?"
+        body={pending?.kind === "revoke" ? `"${pending.label}" will stop working immediately. This cannot be undone.` : ""}
+        confirmLabel="Revoke sub-key"
+        onConfirm={runPending}
+        onCancel={() => setPending(null)}
+      />
     </main>
   );
 }

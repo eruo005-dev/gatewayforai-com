@@ -48,22 +48,21 @@ export default function RouteDiagram() {
         route · limit · retry
       </text>
 
-      {/* provider nodes */}
+      {/* provider nodes — the DOWN node's color-flash is driven by a CSS animation
+          (class rd-flash-*) instead of SMIL <animate>, so the prefers-reduced-motion
+          block in globals.css can disable it (SMIL cannot be CSS-gated). */}
       {PROVIDERS.map((name, i) => (
         <g key={name}>
-          <rect x="588" y={ys[i] - 14} width="106" height="28" rx="7" fill="#101013"
-            stroke={i === DOWN ? "#ff4d5e" : "#222228"}>
-            {i === DOWN && (
-              <animate attributeName="stroke" values="#222228;#222228;#ff4d5e;#ff4d5e;#222228"
-                keyTimes="0;0.45;0.5;0.85;1" dur="8s" repeatCount="indefinite" />
-            )}
-          </rect>
-          <text x="641" y={ys[i] + 4} textAnchor="middle" fill="#8e8e97" fontSize="11" fontFamily="var(--mono)">
+          <rect
+            x="588" y={ys[i] - 14} width="106" height="28" rx="7" fill="#101013"
+            stroke="#222228"
+            className={i === DOWN ? "rd-flash-stroke" : undefined}
+          />
+          <text
+            x="641" y={ys[i] + 4} textAnchor="middle" fill="#8e8e97" fontSize="11" fontFamily="var(--mono)"
+            className={i === DOWN ? "rd-flash-fill" : undefined}
+          >
             {name}
-            {i === DOWN && (
-              <animate attributeName="fill" values="#8e8e97;#8e8e97;#ff4d5e;#ff4d5e;#8e8e97"
-                keyTimes="0;0.45;0.5;0.85;1" dur="8s" repeatCount="indefinite" />
-            )}
           </text>
         </g>
       ))}

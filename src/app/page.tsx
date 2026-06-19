@@ -1,15 +1,29 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import RouteDiagram from "@/components/RouteDiagram";
 import Terminal from "@/components/Terminal";
+import NavBar from "@/components/NavBar";
+import {
+  IconFallback,
+  IconRateLimit,
+  IconProviders,
+  IconDropIn,
+  IconZeroRetention,
+  IconNoSignup,
+  IconLicense,
+  IconSelfHost,
+  IconHosted,
+  IconStar,
+} from "@/components/Icons";
 
-const FEATURES = [
-  ["[~>]", "Automatic fallback", "A provider returns 429 or 500? The gateway fails over to the next provider in your chain before a single token streams back."],
-  ["[##]", "Rate limiting", "Per-key sliding-window limits you control. Protect your budget from runaway loops and abusive clients."],
-  ["[8x]", "Eight providers", "OpenAI, Anthropic, Gemini, Groq, Mistral, Together, DeepSeek, OpenRouter — one endpoint, one key."],
-  ["[->]", "Drop-in compatible", "OpenAI SDK and Anthropic SDK compatible. Change the baseURL and the key. That is the whole migration."],
-  ["[:|]", "Zero retention", "Your prompts and responses pass through and are gone. We store encrypted keys and counters — never content."],
-  ["[no]", "No signup", "No account, no email, no sales call. Paste keys, get a gateway key, ship."],
-] as const;
+const FEATURES: Array<[ReactNode, string, string]> = [
+  [<IconFallback key="i" />, "Automatic fallback", "A provider returns 429 or 500? The gateway fails over to the next provider in your chain before a single token streams back."],
+  [<IconRateLimit key="i" />, "Rate limiting", "Per-key sliding-window limits you control. Protect your budget from runaway loops and abusive clients."],
+  [<IconProviders key="i" />, "Eight providers", "OpenAI, Anthropic, Gemini, Groq, Mistral, Together, DeepSeek, OpenRouter — one endpoint, one key."],
+  [<IconDropIn key="i" />, "Drop-in compatible", "OpenAI SDK and Anthropic SDK compatible. Change the baseURL and the key. That is the whole migration."],
+  [<IconZeroRetention key="i" />, "Zero retention", "Your prompts and responses pass through and are gone. We store encrypted keys and counters — never content."],
+  [<IconNoSignup key="i" />, "No signup", "No account, no email, no sales call. Paste keys, get a gateway key, ship."],
+];
 
 const FAQ = [
   ["Is my OpenAI/Anthropic key safe?", "Keys are encrypted with AES-256-GCM before they touch storage and are only decrypted in-memory to call the provider you chose. They are never logged, never shown again, and you can rotate or delete your config at any time."],
@@ -23,22 +37,44 @@ const FAQ = [
   ["Can I self-host it?", "Absolutely — that's the point. One-click deploy to Vercel plus a free Upstash Redis database and you have your own private gateway. The hosted instance runs the exact same open-source code. See the README on GitHub for the deploy button and setup."],
 ] as const;
 
+const SITE_URL = "https://gatewayforai.com";
+
+const faqJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: FAQ.map(([q, a]) => ({
+    "@type": "Question",
+    name: q,
+    acceptedAnswer: { "@type": "Answer", text: a },
+  })),
+};
+
+const appJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "GatewayforAI",
+  description:
+    "OpenAI-compatible LLM gateway with automatic fallback routing and rate limiting. Bring your own keys. No signup. Open source, MIT licensed.",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "Any",
+  url: SITE_URL,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+};
+
 export default function Home() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(appJsonLd) }}
+      />
       <a href="#main" className="skip-link">Skip to content</a>
       <div className="container">
-        <nav className="nav">
-          <Link href="/" className="logo">gateway<span>for</span>ai</Link>
-          <div className="links">
-            <a href="#features">Features</a>
-            <a href="#how">How it works</a>
-            <a href="#faq">FAQ</a>
-            <a href="https://github.com/eruo005-dev/gatewayforai-com" target="_blank" rel="noopener noreferrer">GitHub</a>
-            <Link href="/manage">Manage</Link>
-            <Link href="/start" style={{ color: "var(--accent)" }}>Get started →</Link>
-          </div>
-        </nav>
+        <NavBar />
       </div>
 
       <main id="main">
@@ -50,7 +86,7 @@ export default function Home() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            ★ Free &amp; open source · MIT licensed
+            <IconStar /> Free &amp; open source · MIT licensed
           </a>
           <h1>One endpoint.<br />Eight providers.<br /><em>Failover built in.</em></h1>
           <p className="sub">
@@ -62,11 +98,27 @@ export default function Home() {
             <a href="#how" className="btn">See how it works</a>
             <a
               href="https://github.com/eruo005-dev/gatewayforai-com"
-              className="btn"
+              className="btn btn-ghost"
               target="_blank"
               rel="noopener noreferrer"
             >Star on GitHub →</a>
           </div>
+          <a
+            href="https://github.com/eruo005-dev/gatewayforai-com"
+            className="stars-badge"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="GitHub stars for gatewayforai-com"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="https://img.shields.io/github/stars/eruo005-dev/gatewayforai-com?style=social"
+              alt="GitHub stars"
+              width={120}
+              height={20}
+              loading="lazy"
+            />
+          </a>
           <RouteDiagram />
         </section>
       </div>
@@ -88,7 +140,7 @@ export default function Home() {
           <div className="grid">
             {FEATURES.map(([ico, title, body]) => (
               <div className="card" key={title}>
-                <span className="ico">{ico}</span>
+                <span className="ico" aria-hidden="true">{ico}</span>
                 <h3>{title}</h3>
                 <p>{body}</p>
               </div>
@@ -117,17 +169,17 @@ export default function Home() {
           <p className="lead">The code is public, the hosted instance is free, and you can run your own. Pick whichever works for you.</p>
           <div className="grid">
             <div className="card">
-              <span className="ico">[MIT]</span>
+              <span className="ico" aria-hidden="true"><IconLicense /></span>
               <h3>MIT licensed</h3>
               <p>Use it, fork it, host it, build a business on it. No strings.</p>
             </div>
             <div className="card">
-              <span className="ico">[^v]</span>
+              <span className="ico" aria-hidden="true"><IconSelfHost /></span>
               <h3>Self-host in one click</h3>
               <p>Deploy your own instance to Vercel with the button in the README. Bring your own Upstash Redis (free tier). Your keys, your infra.</p>
             </div>
             <div className="card">
-              <span className="ico">[**]</span>
+              <span className="ico" aria-hidden="true"><IconHosted /></span>
               <h3>Or use the free hosted instance</h3>
               <p>No signup, BYOK, nothing to pay us. The public instance is the same code you see on GitHub.</p>
             </div>
@@ -157,21 +209,21 @@ export default function Home() {
           <div className="steps">
             <div className="step">
               <h3>Paste your provider keys</h3>
-              <p style={{ color: "var(--muted)", fontSize: 14.5 }}>
+              <p className="step-body">
                 Any subset of the 8 providers. Each key is validated live, encrypted
                 with AES-256-GCM, and never shown again.
               </p>
             </div>
             <div className="step">
               <h3>Order your fallback chain</h3>
-              <p style={{ color: "var(--muted)", fontSize: 14.5 }}>
+              <p className="step-body">
                 Decide who answers first and who catches the failure. Set your
                 rate limit. Get one gw_live_ key.
               </p>
             </div>
             <div className="step">
               <h3>Change two lines of code</h3>
-              <p style={{ color: "var(--muted)", fontSize: 14.5 }}>
+              <p className="step-body">
                 Point baseURL at gatewayforai.com/v1, use your gateway key, set
                 model to &quot;auto&quot;. Done.
               </p>
