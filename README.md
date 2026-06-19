@@ -59,8 +59,8 @@ curl -X POST https://gatewayforai.com/api/config \
 
 ## Status / Security
 
-- 373 tests, CI green on every push to `main`
-- Branch-protected `main`; all merges go through PR + CI
+- 373 passing tests (`npm test`); CI workflow (`.github/workflows/ci.yml`) runs them on every push/PR
+- Branch-protected `main`; all merges go through PR + the required CI check
 - Multiple red-team hardening rounds passed; zero secrets in git history
 - AES-256-GCM key encryption, zero prompt logging, SHA-256-only gateway-key storage
 
