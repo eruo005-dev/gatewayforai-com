@@ -441,6 +441,44 @@ describe("POST /v1/chat/completions", () => {
     expect(text).not.toContain("sk-proj-");
     expect(text).toContain("sk-***redacted***");
   });
+
+  it("STREAMING error path: redacts key fingerprint (a non-ok upstream is buffered, not a live stream)", async () => {
+    // REGRESSION (HIGH): a streaming request (stream:true) whose upstream errors
+    // BEFORE the first token must still have its provider-key fingerprint redacted.
+    // A non-ok upstream is always a buffered JSON error body (callProvider returns
+    // the raw upstream Response on !res.ok before any stream translation), so the
+    // route must read+redact it rather than passing it through verbatim. Previously
+    // the `!body.stream` guard skipped redaction and leaked `sk-proj-…9999`.
+    const upstreamBody = JSON.stringify({
+      error: { message: "Incorrect API key provided: sk-proj-************9999", type: "invalid_request_error" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(upstreamBody, {
+          status: 401,
+          headers: { "content-type": "application/json", "x-error-json": "leak" },
+        }),
+      ),
+    );
+    const res = await chatPOST(
+      req("http://t/v1/chat/completions", {
+        method: "POST",
+        bearer: PARENT_KEY,
+        body: JSON.stringify({
+          model: "openai/gpt-4o",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        }),
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get("x-error-json")).toBeNull();
+    const text = await res.text();
+    expect(text).not.toContain("9999");
+    expect(text).not.toContain("sk-proj-");
+    expect(text).toContain("sk-***redacted***");
+  });
 });
 
 // ─── /v1/messages: Anthropic error-shape on every path ───────────────────────

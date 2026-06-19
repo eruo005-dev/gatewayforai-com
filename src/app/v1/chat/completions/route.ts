@@ -282,9 +282,15 @@ export async function POST(req: Request) {
     "x-gateway-latency-ms": String(Date.now() - started),
     ...(routeStrategy && { "x-gateway-route": routeStrategy }),
   });
-  // On a non-streaming, non-ok upstream, redact any provider-key fingerprint in
-  // the error body. Streaming bodies are passed through untouched (can't buffer).
-  if (!body.stream && !result.response.ok) {
+  // Redact any provider-key fingerprint in the error body on ANY non-ok upstream.
+  // This applies to streaming requests too: a non-ok upstream is always a buffered
+  // error Response (callProvider returns the raw upstream `res` on `!res.ok` BEFORE
+  // any stream translation), so it is safe to read and redact here. Skipping this
+  // for `body.stream` previously leaked the provider key fingerprint (e.g.
+  // `sk-proj-…9999`) verbatim on the streaming error path. Only OK streaming
+  // responses carry a live body that must pass through untouched — and those are
+  // handled by the branch below.
+  if (!result.response.ok) {
     return redactedErrorResponse(result.response, headers);
   }
   return new Response(result.response.body, { status: result.response.status, headers });
