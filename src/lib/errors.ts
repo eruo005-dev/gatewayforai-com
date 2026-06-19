@@ -13,21 +13,28 @@ const TYPE_BY_STATUS: Record<number, string> = {
  * leak the last-4 of the configured provider key to the gateway caller. We replace
  * recognizable key shapes with a fixed redaction token.
  *
- * Matched shapes (longest-prefix first so e.g. `sk-ant-` and `sk-proj-` are caught
- * by the general `sk-` rule):
- *   - OpenAI / generic:  sk-...           (incl. sk-proj-, sk-ant-, sk-or-, ...)
- *   - Groq:              gsk_...
- *   - Google:            AIza...
+ * Matched shapes (longest-prefix first so e.g. `sk-ant-`, `sk-proj-` and `sk-or-`
+ * are all caught by the general `sk-` rule):
+ *   - OpenAI / Anthropic / OpenRouter / generic:  sk-...   (sk-proj-, sk-ant-, sk-or-)
+ *   - Groq:        gsk_...
+ *   - Google:      AIza...
+ *   - xAI:         xai-...
+ *   - Replicate:   r8_...
+ * The trailing char class includes `*`, `…` and `.` so MASKED forms
+ * (`sk-proj-****…9999`) are matched too. The `{2,}` minimum keeps normal prose
+ * like a bare "sk-" or "r8" from matching — only real key-shaped runs are hit.
  * Only error message strings should be passed here — never successful bodies.
  */
 export function redactKeys(s: string): string {
   if (!s) return s;
   return s
-    // sk- followed by any run of key-ish chars (also covers sk-ant-/sk-proj-),
+    // sk- followed by any run of key-ish chars (also covers sk-ant-/sk-proj-/sk-or-),
     // including masked forms that use *, …, or . as fillers.
     .replace(/sk-[A-Za-z0-9_*.…-]{2,}/g, "sk-***redacted***")
     .replace(/gsk_[A-Za-z0-9_*.…-]{2,}/g, "gsk_***redacted***")
-    .replace(/AIza[A-Za-z0-9_*.…-]{2,}/g, "AIza***redacted***");
+    .replace(/AIza[A-Za-z0-9_*.…-]{2,}/g, "AIza***redacted***")
+    .replace(/xai-[A-Za-z0-9_*.…-]{2,}/g, "xai-***redacted***")
+    .replace(/r8_[A-Za-z0-9_*.…-]{2,}/g, "r8_***redacted***");
 }
 
 /**

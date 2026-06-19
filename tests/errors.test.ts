@@ -43,6 +43,30 @@ describe("redactKeys", () => {
     expect(redactKeys("key AIzaSyABCDEF12345 rejected")).toContain("AIza***redacted***");
   });
 
+  it("redacts xAI xai- and Replicate r8_ fingerprints", () => {
+    expect(redactKeys("xAI rejected key xai-AbCdEf123456")).toBe("xAI rejected key xai-***redacted***");
+    const r8 = redactKeys("Replicate: r8_AbCdEf123456 invalid");
+    expect(r8).toContain("r8_***redacted***");
+    expect(r8).not.toContain("AbCdEf");
+  });
+
+  it("redacts sk-or- (OpenRouter) via the general sk- rule", () => {
+    const out = redactKeys("OpenRouter key sk-or-v1-abcdef123456 rejected");
+    expect(out).toContain("sk-***redacted***");
+    expect(out).not.toContain("abcdef");
+  });
+
+  it("does NOT over-redact normal prose with these tokens as substrings", () => {
+    // Bare prefixes / short tokens must not match (the {2,} minimum guards this).
+    // "task r8" / "the xai team" / "ask the desk" must survive untouched.
+    expect(redactKeys("Provider returned status 503; retry after the desk reopens.")).toBe(
+      "Provider returned status 503; retry after the desk reopens.",
+    );
+    expect(redactKeys("Sprint r8 review with the xAI team next week.")).toBe(
+      "Sprint r8 review with the xAI team next week.",
+    );
+  });
+
   it("leaves a clean message untouched", () => {
     const msg = "The model is overloaded. Please retry.";
     expect(redactKeys(msg)).toBe(msg);
