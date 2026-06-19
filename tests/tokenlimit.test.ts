@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { FakeRedis } from "./fake-redis";
 import { setRedisForTests } from "@/lib/config-store";
 import { checkTokenLimit, recordTokens } from "@/lib/ratelimit";
@@ -60,5 +60,43 @@ describe("checkTokenLimit", () => {
     const result = await checkTokenLimit("hash1", 1000, NOW);
     const expectedReset = (Math.floor(NOW / 60_000) + 1) * 60_000;
     expect(result.reset).toBe(expectedReset);
+  });
+});
+
+describe("recordTokens — in-flight reservation + reconciliation (FIX 4)", () => {
+  it("a reservation is reflected in checkTokenLimit before reconciliation", async () => {
+    // Reserve the estimate up front — a concurrent checkTokenLimit must see it.
+    await recordTokens("hashR", 950, NOW);
+    expect((await checkTokenLimit("hashR", 1000, NOW)).success).toBe(true);
+    await recordTokens("hashR", 50, NOW); // pushes to 1000
+    expect((await checkTokenLimit("hashR", 1000, NOW)).success).toBe(false);
+  });
+
+  it("reconciles with a NEGATIVE delta when actual < estimate", async () => {
+    // Reserve 800, then reconcile down by 300 (actual was 500). Net = 500.
+    await recordTokens("hashD", 800, NOW);
+    await recordTokens("hashD", -300, NOW);
+    // 500 < 1000 → still passes; prove the bucket actually dropped.
+    expect((await checkTokenLimit("hashD", 600, NOW)).success).toBe(true);
+    expect((await checkTokenLimit("hashD", 500, NOW)).success).toBe(false); // 500 >= 500
+  });
+
+  it("a full refund (−estimate) bills 0 for a failed request", async () => {
+    await recordTokens("hashF", 400, NOW); // reservation
+    await recordTokens("hashF", -400, NOW); // refund (upstream failed)
+    // Net 0 → a 1-token limit still passes.
+    expect((await checkTokenLimit("hashF", 1, NOW)).success).toBe(true);
+  });
+});
+
+describe("recordTokens — atomic INCRBY+EXPIRE (FIX 5)", () => {
+  it("uses redis.eval (single round-trip), not separate incrby+expire", async () => {
+    const evalSpy = vi.spyOn(redis, "eval");
+    await recordTokens("hashE", 123, NOW);
+    expect(evalSpy).toHaveBeenCalledTimes(1);
+    // The script must carry both the INCRBY and the EXPIRE.
+    const script = evalSpy.mock.calls[0][0] as string;
+    expect(script).toContain("INCRBY");
+    expect(script).toContain("EXPIRE");
   });
 });

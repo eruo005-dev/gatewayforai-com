@@ -26,6 +26,78 @@ export function setRedisForTests(r: Redis) {
   _redis = r;
 }
 
+// ─── Redis timeout + degradation policy ──────────────────────────────────────
+
+/**
+ * Default Redis op timeout (ms), overridable via env REDIS_TIMEOUT_MS. Read once
+ * at module load so the hot path never re-parses env. A slow/brown Redis must not
+ * hang a request up to the 25s upstream timeout — every call on the hot path is
+ * bounded by this budget. The auth path uses this value directly (fail closed);
+ * the rate limiter uses a tighter budget (fail open) — see ratelimit.ts.
+ */
+export const REDIS_TIMEOUT_MS = (() => {
+  const raw = process.env.REDIS_TIMEOUT_MS;
+  const n = raw ? parseInt(raw, 10) : 2000;
+  return Number.isFinite(n) && n > 0 ? n : 2000;
+})();
+
+/**
+ * Races a promise against a timeout. On timeout, returns `onTimeout()` instead of
+ * hanging. The underlying op is NOT cancelled (Redis REST has no abort), but its
+ * late result is discarded — the caller has already moved on with the fallback.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  onTimeout: () => T,
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(onTimeout());
+    }, ms);
+    promise.then(
+      (v) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      },
+      () => {
+        // On a rejected Redis op we also fall back, same as a timeout.
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(onTimeout());
+      },
+    );
+  });
+}
+
+// ─── Atomic counter primitive ────────────────────────────────────────────────
+
+// Lua: INCRBY a key by n, then (re)set its TTL — in ONE round-trip so a crash can
+// never land between the increment and the expire (which would leak the key with
+// no TTL forever). Returns the post-increment value.
+const INCR_EXPIRE_LUA =
+  "local v = redis.call('INCRBY', KEYS[1], ARGV[1]); redis.call('EXPIRE', KEYS[1], ARGV[2]); return v";
+
+/**
+ * Atomically `INCRBY key n` and `EXPIRE key ttlSeconds`. Use this everywhere a
+ * counter needs a TTL (token buckets, breaker counters) so the increment and the
+ * expiry are inseparable. `n` may be negative (reconciliation deltas).
+ */
+export async function incrByWithExpire(
+  key: string,
+  n: number,
+  ttlSeconds: number,
+): Promise<number> {
+  const v = await redis().eval(INCR_EXPIRE_LUA, [key], [n, ttlSeconds]);
+  return Number(v);
+}
+
 const configKey = (hash: string) => `config:${hash}`;
 const subkeyKey = (hash: string) => `subkey:${hash}`;
 
@@ -246,13 +318,25 @@ export interface GatewayAuthResult {
  * Returns null on any miss (unknown key, revoked sub-key, orphaned sub-key).
  */
 export async function resolveGatewayAuth(key: string): Promise<GatewayAuthResult | null> {
+  // Degradation policy for AUTH: FAIL CLOSED. If Redis is slow/brown and we can't
+  // read the record within REDIS_TIMEOUT_MS, we cannot authenticate — so we DENY
+  // (return null → 401) rather than risk admitting an unverified key. Availability
+  // is sacrificed for correctness here; the rate limiter makes the opposite choice.
   if (key.startsWith("gw_sub_")) {
     const subHash = sha256(key);
-    const raw = await redis().get<string | SubKeyRecord>(subkeyKey(subHash));
+    const raw = await withTimeout(
+      redis().get<string | SubKeyRecord>(subkeyKey(subHash)),
+      REDIS_TIMEOUT_MS,
+      () => null,
+    );
     if (!raw) return null;
     const record: SubKeyRecord = typeof raw === "string" ? JSON.parse(raw) : raw;
 
-    const stored = await loadStoredByHash(record.parentHash);
+    const stored = await withTimeout(
+      loadStoredByHash(record.parentHash),
+      REDIS_TIMEOUT_MS,
+      () => null,
+    );
     if (!stored) return null;
 
     const config: GatewayConfig = {
@@ -294,7 +378,7 @@ export async function resolveGatewayAuth(key: string): Promise<GatewayAuthResult
 
   // Parent / live key path
   const hash = sha256(key);
-  const stored = await loadStoredByHash(hash);
+  const stored = await withTimeout(loadStoredByHash(hash), REDIS_TIMEOUT_MS, () => null);
   if (!stored) return null;
 
   const config: GatewayConfig = {

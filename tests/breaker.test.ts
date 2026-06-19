@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { FakeRedis } from "./fake-redis";
 import { setRedisForTests } from "@/lib/config-store";
 import { redisBreaker } from "@/lib/breaker";
@@ -27,5 +27,14 @@ describe("redisBreaker", () => {
     for (let i = 0; i < 3; i++) await b.onFailure("openai");
     expect(await b.isOpen("groq")).toBe(false);
     expect(await redisBreaker("hash2").isOpen("openai")).toBe(false);
+  });
+
+  it("onFailure increments atomically via redis.eval (INCRBY+EXPIRE, FIX 5)", async () => {
+    const evalSpy = vi.spyOn(redis, "eval");
+    await redisBreaker("hash1").onFailure("openai");
+    expect(evalSpy).toHaveBeenCalledTimes(1);
+    const script = evalSpy.mock.calls[0][0] as string;
+    expect(script).toContain("INCRBY");
+    expect(script).toContain("EXPIRE");
   });
 });
